@@ -534,6 +534,98 @@
     }, 3500);
   }
 
+  // ── New issue modal ─────────────────────────────────────────────────
+  // Tiny inline form that posts `createBead` through the native bridge.
+  // Kept self-contained so the Board view doesn't need to know about the
+  // Rich/Issues views (they can grow their own entry points later).
+  function openNewIssueModal() {
+    closeNewIssueModal();
+    const tpl = document.getElementById('new-issue-tpl');
+    if (!tpl) return;
+    const frag = tpl.content.firstElementChild.cloneNode(true);
+    document.body.appendChild(frag);
+
+    const overlay  = document.getElementById('new-issue-overlay');
+    const form     = overlay.querySelector('.new-issue-form');
+    const closeBtn = overlay.querySelector('.modal-close');
+    const cancel   = overlay.querySelector('.new-issue-cancel');
+    const submit   = overlay.querySelector('.new-issue-submit');
+    const statusEl = overlay.querySelector('.form-status');
+    const titleEl  = overlay.querySelector('input[name="title"]');
+
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeNewIssueModal();
+    });
+    closeBtn.addEventListener('click', closeNewIssueModal);
+    cancel.addEventListener('click', closeNewIssueModal);
+    document.addEventListener('keydown', newIssueEscHandler);
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const title = titleEl.value.trim();
+      if (!title) {
+        statusEl.textContent = 'Title is required';
+        statusEl.classList.add('is-error');
+        titleEl.focus();
+        return;
+      }
+      const data = new FormData(form);
+      const labelsRaw = (data.get('labels') || '').toString();
+      const labels = labelsRaw.split(',').map(s => s.trim()).filter(Boolean);
+      const payload = {
+        title,
+        issueType:   (data.get('issueType') || 'task').toString(),
+        priority:    parseInt(data.get('priority'), 10),
+        description: (data.get('description') || '').toString(),
+        labels,
+      };
+      submit.disabled = true;
+      statusEl.classList.remove('is-error');
+      statusEl.textContent = 'Creating…';
+
+      if (!window.__nppBridge) {
+        statusEl.textContent = 'native bridge unavailable';
+        statusEl.classList.add('is-error');
+        submit.disabled = false;
+        return;
+      }
+      window.__nppBridge.call('createBead', payload).then((resp) => {
+        if (resp.ok) {
+          const newId = resp.bead && resp.bead.id;
+          showToast(newId ? (newId + ' created') : 'issue created');
+          closeNewIssueModal();
+          // Optimistic: show the new bead immediately under its intended
+          // status column. Real data arrives via the broadcast, which
+          // clears the optimistic override automatically.
+          if (newId) optimistic.set(newId, 'open');
+        } else {
+          statusEl.textContent = resp.error || 'create failed';
+          statusEl.classList.add('is-error');
+          submit.disabled = false;
+        }
+      }).catch((err) => {
+        statusEl.textContent = (err && err.message) || String(err);
+        statusEl.classList.add('is-error');
+        submit.disabled = false;
+      });
+    });
+
+    // Focus the title field and let the user start typing immediately.
+    setTimeout(() => titleEl.focus(), 0);
+  }
+  function closeNewIssueModal() {
+    const overlay = document.getElementById('new-issue-overlay');
+    if (overlay) overlay.remove();
+    document.removeEventListener('keydown', newIssueEscHandler);
+  }
+  function newIssueEscHandler(e) {
+    if (e.key === 'Escape') closeNewIssueModal();
+  }
+  (function wireNewIssueButton() {
+    const btn = document.getElementById('new-issue-btn');
+    if (btn) btn.addEventListener('click', openNewIssueModal);
+  })();
+
   // ── Mode toggle wiring ──────────────────────────────────────────────
   function syncModeButtons() {
     const btns = document.querySelectorAll('#board-hdr .mode-btn');

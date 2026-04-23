@@ -90,6 +90,84 @@ body { display: flex; flex-direction: column; }
   background: var(--bg-elev);
   color: var(--text);
 }
+.new-issue-btn {
+  margin-left: auto;
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+.new-issue-btn:hover {
+  background: var(--accent, #2563eb);
+  color: #fff;
+  border-color: var(--accent, #2563eb);
+}
+.new-issue-modal { width: min(520px, 92vw); }
+.new-issue-form { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; }
+.new-issue-form .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.new-issue-form .field-label { color: var(--text-muted); font-size: 11px; letter-spacing: 0.02em; }
+.new-issue-form .field-label .req  { color: #dc2626; }
+.new-issue-form .field-label .hint { color: var(--text-muted); font-weight: normal; }
+.new-issue-form .field-row { display: flex; gap: 10px; }
+.new-issue-form .field-row .field { flex: 1; }
+.new-issue-form input[type="text"],
+.new-issue-form select,
+.new-issue-form textarea {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+}
+.new-issue-form textarea {
+  resize: vertical;
+  min-height: 72px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.new-issue-form input:focus,
+.new-issue-form select:focus,
+.new-issue-form textarea:focus {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.modal-actions .form-status {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.modal-actions .form-status.is-error { color: #dc2626; }
+.btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--text);
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-primary { background: var(--accent, #2563eb); color: #fff; border-color: var(--accent, #2563eb); }
+.btn-primary:hover { filter: brightness(1.05); }
+.btn-primary:disabled { opacity: 0.6; cursor: wait; }
+.btn-secondary:hover { background: var(--bg); }
 .board-scroll {
   flex: 1;
   overflow-x: auto;
