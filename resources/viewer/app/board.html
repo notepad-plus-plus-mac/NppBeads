@@ -7,6 +7,16 @@
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
+  <div id="board-hdr" class="board-hdr">
+    <div class="mode-toggle" role="tablist" aria-label="Status mode">
+      <button class="mode-btn" data-mode="raw"       type="button" role="tab"
+              title="Status as stored in bd — what you manually set"
+              aria-selected="true">Raw</button>
+      <button class="mode-btn" data-mode="effective" type="button" role="tab"
+              title="Promotes open/in-progress issues with open blocker deps to the Blocked column"
+              aria-selected="false">Effective</button>
+    </div>
+  </div>
   <div id="board-scroll" class="board-scroll">
     <div id="board" class="board"></div>
   </div>

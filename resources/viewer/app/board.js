@@ -26,6 +26,41 @@
   // pollution.
   const optimistic = new Map();
 
+  // ── Status mode ─────────────────────────────────────────────────────
+  // 'raw'       — group by the stored `status` field (what bd wrote).
+  // 'effective' — promote open/in_progress issues that have at least one
+  //               non-closed `blocks` dependency into the Blocked column
+  //               (matches what `bd ready` / `bd status` consider blocked).
+  // The raw `status` field is never rewritten by bd just because a dep
+  // opened — the graph-based blocked state is computed on the fly. This
+  // toggle surfaces that distinction without changing any data.
+  const MODE_KEY = 'nppbeads.board.statusMode';
+  function loadMode() {
+    try {
+      const v = localStorage.getItem(MODE_KEY);
+      return v === 'effective' ? 'effective' : 'raw';
+    } catch { return 'raw'; }
+  }
+  function saveMode(m) {
+    try { localStorage.setItem(MODE_KEY, m); } catch {}
+  }
+  let statusMode = loadMode();
+
+  function hasOpenBlocker(bead) {
+    if (!bead || !bead.deps || !bead.deps.length) return false;
+    for (const d of bead.deps) {
+      const kind = d.dependency_type || d.type || 'blocks';
+      if (kind !== 'blocks') continue;
+      // bd embeds the target's current status on each dep entry, so we
+      // can decide without a cross-lookup. Treat an absent status as
+      // 'open' — a conservative default so an export without statuses
+      // still surfaces blockage rather than silently hiding it.
+      const s = d.status || 'open';
+      if (s !== 'closed') return true;
+    }
+    return false;
+  }
+
   // Persisted column collapse state (per-browser-tab; survives reload).
   const COLLAPSED_KEY = 'nppbeads.board.collapsed';
   function loadCollapsed() {
@@ -48,7 +83,12 @@
 
   function effectiveStatus(b) {
     const ov = optimistic.get(b.id);
-    return ov || b.status;
+    const base = ov || b.status;
+    if (statusMode !== 'effective') return base;
+    if ((base === 'open' || base === 'in_progress') && hasOpenBlocker(b)) {
+      return 'blocked';
+    }
+    return base;
   }
 
   function groupByStatus(beads) {
@@ -494,13 +534,51 @@
     }, 3500);
   }
 
+  // ── Mode toggle wiring ──────────────────────────────────────────────
+  function syncModeButtons() {
+    const btns = document.querySelectorAll('#board-hdr .mode-btn');
+    btns.forEach((b) => {
+      const selected = b.dataset.mode === statusMode;
+      b.setAttribute('aria-selected', selected ? 'true' : 'false');
+    });
+  }
+  function onModeClick(e) {
+    const m = e.currentTarget.dataset.mode;
+    if (!m || m === statusMode) return;
+    statusMode = m;
+    saveMode(m);
+    syncModeButtons();
+    render();
+  }
+  function wireModeToggle() {
+    const btns = document.querySelectorAll('#board-hdr .mode-btn');
+    btns.forEach((b) => b.addEventListener('click', onModeClick));
+    syncModeButtons();
+  }
+  wireModeToggle();
+
   // ── App wiring ──────────────────────────────────────────────────────
   App.onDataLoaded = render;
   App.onRefresh    = function () {
-    // Real data arrived — clear any optimistic overrides that match.
-    for (const [id, st] of [...optimistic]) {
-      const b = App.beads.find(x => x.id === id);
-      if (!b || b.status === st) optimistic.delete(id);
+    // Real data arrived — drop every optimistic override, then render.
+    // In Effective mode, if a card's computed state differs from the
+    // column the user dragged it to, surface a toast so the snap-back
+    // doesn't look like a silent no-op. We stash overrides before
+    // clearing so the render-after-refresh shows truth, not stale
+    // guesses.
+    const prevOverrides = new Map(optimistic);
+    optimistic.clear();
+    if (statusMode === 'effective') {
+      for (const [id, ov] of prevOverrides) {
+        const b = App.beads.find(x => x.id === id);
+        if (!b) continue;
+        const eff = effectiveStatus(b);
+        if (eff !== ov) {
+          showToast(b.id + ' · shown in ' + App.statusColor(eff).label +
+                    ' (has open blockers)');
+          break;  // one toast per refresh is enough
+        }
+      }
     }
     render();
   };

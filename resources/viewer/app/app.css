@@ -53,6 +53,43 @@ html, body {
 body { display: flex; flex-direction: column; }
 
 /* ─── Board layout ─────────────────────────────────────────────────── */
+.board-hdr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex: 0 0 auto;
+}
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 11px;
+}
+.mode-toggle .mode-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 3px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+}
+.mode-toggle .mode-btn + .mode-btn { border-left: 1px solid var(--border); }
+.mode-toggle .mode-btn[aria-selected="true"] {
+  background: var(--accent, #2563eb);
+  color: #fff;
+}
+.mode-toggle .mode-btn:hover:not([aria-selected="true"]) {
+  background: var(--bg-elev);
+  color: var(--text);
+}
 .board-scroll {
   flex: 1;
   overflow-x: auto;
