@@ -16,7 +16,7 @@
 
   if (window.__nppBeads) return;
   const NPP = window.__nppBeads = {
-    version: 15,  // bump on every bridge.js edit to confirm the page
+    version: 16,  // bump on every bridge.js edit to confirm the page
                   // picked up the latest file (stale WebKit cache check).
     mode: 'jsonl',
     // Prefer the synchronously-preloaded JSONL (injected by BeadsPanel
@@ -533,4 +533,48 @@
   };
 
   NPP.log('bridge.js active — mode=' + NPP.mode);
+
+  // ── Native-facing helpers that reach into the Rich viewer's Alpine
+  //    root. All guard against Alpine not being loaded (our own app/
+  //    pages have no Alpine, so these are safe no-ops there). We use
+  //    the public Alpine.$data(el) API — stable across Alpine v3.x —
+  //    rather than poking at _x_dataStack directly. ─────────────────
+  function richApp() {
+    try {
+      if (!window.Alpine || typeof window.Alpine.$data !== 'function') return null;
+      const el = document.querySelector('[x-data]');
+      if (!el) return null;
+      return window.Alpine.$data(el);
+    } catch (e) { NPP.warn('richApp failed:', e); return null; }
+  }
+
+  // Called by BeadsPanel._pushSearchQuery when the toolbar search is
+  // typed in while on the Rich Issues view. We force-route to the
+  // LIKE-based queryIssues path (searchQuery stays set, loadIssues
+  // catches any FTS error and falls back — see viewer.js patch).
+  window.__nppRichSearch = function (q) {
+    const app = richApp();
+    if (!app) return false;
+    app.searchQuery = (q || '').trim();
+    app.page = 1;
+    if (typeof app.loadIssues === 'function') {
+      try { app.loadIssues(); } catch (e) { NPP.warn('loadIssues failed:', e); }
+    }
+    return true;
+  };
+
+  // Called by BeadsPanel.viewDidMoveToWindow (detach/dock transitions)
+  // and prepareForShow (fresh open). Clears any zombie state — the
+  // graph detail panel especially likes to get stuck visible after a
+  // reparent because its enter/leave transitions don't complete when
+  // the hosting window changes.
+  window.__nppClearTransientState = function () {
+    const app = richApp();
+    if (!app) return false;
+    try {
+      if (app.graphDetailNode !== undefined) app.graphDetailNode = null;
+      if (app.selectedIssue   !== undefined) app.selectedIssue   = null;
+    } catch (e) { NPP.warn('clearTransient failed:', e); }
+    return true;
+  };
 })();

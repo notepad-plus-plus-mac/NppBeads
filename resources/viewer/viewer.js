@@ -2867,14 +2867,24 @@ function beadsApp() {
       };
 
       if (this.searchQuery) {
-        this.issues = searchIssues(this.searchQuery, {
-          mode: this.searchMode,
-          preset: this.searchPreset,
-          limit: this.pageSize,
-          offset,
-          filters,
-        });
-        this.totalIssues = countSearchIssues(this.searchQuery, filters);
+        // NppBeads: the upstream path uses FTS5 via searchIssues(). Our
+        // synthesized sql-wasm build doesn't include FTS5, so FTS throws
+        // "no such module: fts5". Fall back cleanly to the LIKE-based
+        // queryIssues which already respects filters.search.
+        try {
+          this.issues = searchIssues(this.searchQuery, {
+            mode: this.searchMode,
+            preset: this.searchPreset,
+            limit: this.pageSize,
+            offset,
+            filters,
+          });
+          this.totalIssues = countSearchIssues(this.searchQuery, filters);
+        } catch (e) {
+          console.warn('[NppBeads] FTS unavailable, using LIKE fallback:', e && e.message);
+          this.issues = queryIssues(filters, this.sort, this.pageSize, offset);
+          this.totalIssues = countIssues(filters);
+        }
       } else {
         this.issues = queryIssues(filters, this.sort, this.pageSize, offset);
         this.totalIssues = countIssues(filters);

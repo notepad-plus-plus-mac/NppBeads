@@ -545,15 +545,27 @@ static NSString *jsStringLiteral(NSString *input) {
 }
 
 - (void)_pushSearchQuery:(NSString *)q {
-    // Board view uses window.__nppApp.setFilter; Rich viewer has its own
-    // FTS-backed search which we DON'T have an sqlite with FTS5 for, so
-    // Rich-view search is a Phase 3 item. For now only Board reacts.
     if (!_viewerLoaded) return;
-    NSString *js = [NSString stringWithFormat:
-        @"if (window.__nppApp && typeof window.__nppApp.setFilter === 'function') {"
-         "  window.__nppApp.setFilter({ query: %@ });"
-         "}",
-        jsStringLiteral(q)];
+    NSString *js = nil;
+    if (_viewMode == BeadsViewModeBoard) {
+        // Board (our native page) exposes window.__nppApp.setFilter.
+        js = [NSString stringWithFormat:
+            @"if (window.__nppApp && typeof window.__nppApp.setFilter === 'function') {"
+             "  window.__nppApp.setFilter({ query: %@ });"
+             "}",
+            jsStringLiteral(q)];
+    } else if (_viewMode == BeadsViewModeIssues) {
+        // Rich Issues — bridge.js installs __nppRichSearch which routes
+        // into the Alpine root and calls loadIssues() (LIKE fallback for
+        // missing FTS5).
+        js = [NSString stringWithFormat:
+            @"if (typeof window.__nppRichSearch === 'function') {"
+             "  window.__nppRichSearch(%@);"
+             "}",
+            jsStringLiteral(q)];
+    } else {
+        return;   // Dashboard/Insights/Graph — search is hidden anyway
+    }
     [_webView evaluateJavaScript:js completionHandler:nil];
 }
 
@@ -785,11 +797,11 @@ static NSString *jsStringLiteral(NSString *input) {
     }
     [_viewModePopup selectItemWithTag:_viewMode];
 
-    // Phase 2: our search box filters the Board view only. Rich-Issues
-    // search needs FTS5 (not in our sql-wasm build); Dashboard / Insights
-    // are aggregates; Graph has its own "Find node…" field. Hide where
-    // it wouldn't do anything — clearer UX.
-    BOOL showSearch = (_viewMode == BeadsViewModeBoard);
+    // Search field: Board + Issues (where per-issue filtering applies).
+    // Dashboard / Insights are aggregates; Graph has its own "Find node…".
+    // Issues uses a LIKE fallback on loadIssues (we bypass FTS5).
+    BOOL showSearch = (_viewMode == BeadsViewModeBoard ||
+                       _viewMode == BeadsViewModeIssues);
     _searchField.hidden = !showSearch;
     if (!showSearch && _searchField.stringValue.length) {
         // Clear any stale query so switching back to Board shows the
@@ -876,6 +888,39 @@ static NSString *jsStringLiteral(NSString *input) {
 - (void)dealloc {
     @try { [_webView removeObserver:self forKeyPath:@"URL"]; }
     @catch (NSException *e) { /* not added */ }
+}
+
+// Fires when the panel's host window changes — pop-out to a floating
+// panel, docking back into the side-panel stack, or parent-window
+// reparenting. Alpine keeps its reactive state across these transitions
+// but its x-transition animations often leave overlays (the graph
+// detail panel, the selectedIssue modal) in a "visible-but-zombie"
+// state. We nudge Alpine to clear them.
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    if (!_viewerLoaded || !_webView || !self.window) return;
+    [_webView evaluateJavaScript:
+        @"if (typeof window.__nppClearTransientState === 'function') {"
+         "  window.__nppClearTransientState();"
+         "}"
+        completionHandler:nil];
+}
+
+// Called by NppBeads.mm every time the user shows the panel. Resets
+// the view to Dashboard + clears the search so re-opening feels fresh
+// rather than resuming whatever weird state the user last left behind.
+- (void)prepareForShow {
+    _viewMode = BeadsViewModeDashboard;
+    [_viewModePopup selectItemWithTag:_viewMode];
+    _searchField.stringValue = @"";
+    _lastSearchQuery = @"";
+    [self _refreshTitleBar];
+    // Full reload so Alpine re-inits and any transient overlay (graph
+    // detail panel, issue modal) is definitely gone.
+    _viewerLoaded = NO;
+    [self _installJsonlUserScript];
+    [_webView loadRequest:[NSURLRequest requestWithURL:
+        [self _urlForViewMode:_viewMode]]];
 }
 
 // KVO: webView.URL changed. Map it back to a BeadsViewMode and update

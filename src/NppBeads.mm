@@ -185,6 +185,10 @@ static void cmdTogglePanel() {
         (uintptr_t)sFuncItem[kCmdShowPanel]._cmdID, target ? 1 : 0);
 
     if (target) {
+        // Reset view + clear search so re-open feels fresh rather than
+        // resuming stale state. Must happen BEFORE rescan (rescan may
+        // trigger a reload that would race with the prepare).
+        [sPanel prepareForShow];
         if (g_panelHandle > 0) {
             sNpp._sendMessage(sNpp._nppHandle, NPPM_DMM_SHOWPANEL,
                               (uintptr_t)g_panelHandle, 0);

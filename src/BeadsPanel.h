@@ -70,6 +70,11 @@ typedef NS_ENUM(NSInteger, BeadsThemePref) {
 // Reread JSONL from disk and ask the viewer to rehydrate.
 - (void)reloadData;
 
+// Reset to Dashboard + clear search before the panel becomes visible.
+// Called by NppBeads.mm on each show transition so re-opening doesn't
+// inherit whatever view/search state the user was last in.
+- (void)prepareForShow;
+
 // Open the .beads/ directory in Finder (menu action).
 - (void)openBeadsDirInFinder:(nullable id)sender;
 
