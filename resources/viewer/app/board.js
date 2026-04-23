@@ -692,6 +692,13 @@
       sp.textContent = '@' + b.assignee;
       meta.appendChild(sp);
     }
+    if (b.sourceRepo) {
+      const sp = document.createElement('span');
+      sp.className = 'pill pill-source-repo';
+      sp.textContent = App.sourceRepoLabel(b.sourceRepo);
+      sp.title = 'source: ' + b.sourceRepo;   // full path on hover
+      meta.appendChild(sp);
+    }
     const labelsToShow = b.labels.slice(0, 3);
     for (const l of labelsToShow) {
       const sp = document.createElement('span');

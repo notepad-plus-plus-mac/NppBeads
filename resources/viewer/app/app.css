@@ -433,6 +433,21 @@ body { display: flex; flex-direction: column; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* source_repo chip — surfaces cross-repo imports. Muted styling so it
+   doesn't compete with priority / labels for attention. Ayu-neutral. */
+.pill-source-repo {
+  background: var(--panel-2, rgba(127,127,127,0.12));
+  color: var(--text-muted, #888);
+  font-weight: 500;
+  font-size: 9px;
+  padding: 0 6px;
+  border: 1px solid rgba(127,127,127,0.25);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  vertical-align: middle;
+}
 
 /* ─── Toast (optimistic-update notice) ─────────────────────────────── */
 .toast {

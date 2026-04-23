@@ -31,6 +31,14 @@
   // once here so every view works off the same object structure.
   function normalizeBead(r) {
     if (!r || typeof r !== 'object') return null;
+    // source_repo: bd stores "." for issues native to the current repo;
+    // anything else is a cross-repo import worth showing as a chip. Empty
+    // string / null / undefined → no chip.
+    let sourceRepo = null;
+    if (typeof r.source_repo === 'string') {
+      const sr = r.source_repo.trim();
+      if (sr && sr !== '.') sourceRepo = sr;
+    }
     const out = {
       id:          String(r.id || ''),
       title:       String(r.title || ''),
@@ -43,6 +51,7 @@
                    : (typeof r.labels === 'string' && r.labels.length)
                       ? r.labels.split(',').map(s => s.trim()).filter(Boolean)
                       : [],
+      sourceRepo:  sourceRepo,
       createdAt:   r.created_at || null,
       updatedAt:   r.updated_at || null,
       closedAt:    r.closed_at || null,
@@ -50,6 +59,15 @@
     };
     return out;
   }
+
+  // Format a source_repo value for display — if it looks like a path,
+  // use the last component; otherwise show the string as-is.
+  App.sourceRepoLabel = function (sr) {
+    if (!sr) return '';
+    if (sr.indexOf('/') === -1) return sr;
+    const parts = sr.split('/').filter(Boolean);
+    return parts[parts.length - 1] || sr;
+  };
 
   function parseJsonl(text) {
     const out = [];
