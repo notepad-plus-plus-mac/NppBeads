@@ -1,0 +1,172 @@
+// NppBeads — shared helpers for the native-rendered side (board / issues /
+// detail). Runs in every app/*.html page. Keep this small and
+// dependency-free. No framework.
+//
+// Data source: we rely on `window.__nppBeadsPreloadedJsonl` (injected via
+// WKUserScript at document-start by BeadsPanel._installJsonlUserScript).
+// Native calls `window.__nppApp.reload(jsonl)` when the JSONL on disk
+// changes.
+//
+// Theme: BeadsPanel sets `document.documentElement.dataset.theme =
+// 'dark'|'light'` via evaluateJavaScript when macOS system theme changes.
+//
+// Search: BeadsPanel sets `window.__nppApp.filter = { query: '...' }` and
+// calls `window.__nppApp.applyFilter()`. Each view wires its own render.
+// ─────────────────────────────────────────────────────────────────────
+
+(function () {
+  'use strict';
+  if (window.__nppApp) return;
+
+  const App = window.__nppApp = {
+    beads: [],
+    filter: { query: '' },
+    theme: document.documentElement.dataset.theme || 'dark',
+    log(...a)  { try { console.log('[NppBeads/app]', ...a); } catch {} },
+    warn(...a) { try { console.warn('[NppBeads/app]', ...a); } catch {} },
+  };
+
+  // ── Bead normalization ──────────────────────────────────────────────
+  // Both JSONL and bd --json produce slightly different shapes. Normalize
+  // once here so every view works off the same object structure.
+  function normalizeBead(r) {
+    if (!r || typeof r !== 'object') return null;
+    const out = {
+      id:          String(r.id || ''),
+      title:       String(r.title || ''),
+      description: String(r.description || ''),
+      status:      String(r.status || 'open'),
+      priority:    (typeof r.priority === 'number') ? r.priority : null,
+      type:        String(r.issue_type || r.type || 'task'),
+      assignee:    r.assignee || r.created_by || null,
+      labels:      Array.isArray(r.labels) ? r.labels
+                   : (typeof r.labels === 'string' && r.labels.length)
+                      ? r.labels.split(',').map(s => s.trim()).filter(Boolean)
+                      : [],
+      createdAt:   r.created_at || null,
+      updatedAt:   r.updated_at || null,
+      closedAt:    r.closed_at || null,
+      deps:        Array.isArray(r.dependencies) ? r.dependencies : [],
+    };
+    return out;
+  }
+
+  function parseJsonl(text) {
+    const out = [];
+    if (!text) return out;
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (!t) continue;
+      try {
+        const o = JSON.parse(t);
+        const b = normalizeBead(o);
+        if (b && b.id) out.push(b);
+      } catch (e) {
+        // merge-conflict markers, partial lines — skip quietly
+      }
+    }
+    return out;
+  }
+
+  App.load = function (jsonl) {
+    App.beads = parseJsonl(jsonl);
+    App.log('loaded ' + App.beads.length + ' beads');
+    if (typeof App.onDataLoaded === 'function') App.onDataLoaded();
+  };
+
+  App.reload = function (jsonl) {
+    App.load(jsonl);
+    if (typeof App.onRefresh === 'function') App.onRefresh();
+  };
+
+  App.setFilter = function (f) {
+    App.filter = Object.assign({ query: '' }, f || {});
+    if (typeof App.applyFilter === 'function') App.applyFilter();
+  };
+
+  App.setTheme = function (theme) {
+    App.theme = theme === 'light' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = App.theme;
+  };
+
+  // Case-insensitive match over id/title/description/labels/assignee.
+  App.matchesQuery = function (bead, query) {
+    if (!query) return true;
+    const q = query.toLowerCase();
+    if (bead.id.toLowerCase().includes(q)) return true;
+    if (bead.title.toLowerCase().includes(q)) return true;
+    if (bead.description.toLowerCase().includes(q)) return true;
+    if (bead.assignee && bead.assignee.toLowerCase().includes(q)) return true;
+    for (const l of bead.labels) if (l.toLowerCase().includes(q)) return true;
+    return false;
+  };
+
+  // ── UI presentation helpers (icon glyphs, label colors, etc.) ───────
+  // Label auto-coloring — same trick vscode-beads uses: hash label text
+  // to a stable HSL. Keeps lightness high so text reads on any theme.
+  App.labelColor = function (label) {
+    let h = 0;
+    for (let i = 0; i < label.length; i++) {
+      h = ((h << 5) - h + label.charCodeAt(i)) | 0;
+    }
+    const hue = Math.abs(h) % 360;
+    return `hsl(${hue}, 55%, 45%)`;
+  };
+
+  // Tiny icon helper (SVG glyphs rendered inline). Keep the set small to
+  // avoid adding a font or icon pack.
+  App.typeIcon = function (type) {
+    const t = String(type || '').toLowerCase();
+    const icons = {
+      bug:     '🪲',
+      feature: '✨',
+      task:    '✓',
+      epic:    '⬢',
+      chore:   '•',
+    };
+    return icons[t] || icons.task;
+  };
+
+  App.statusColor = function (status) {
+    switch (status) {
+      case 'open':        return { fg: '#0369a1', bg: '#e0f2fe', label: 'Open' };
+      case 'in_progress': return { fg: '#b45309', bg: '#fef3c7', label: 'In Progress' };
+      case 'blocked':     return { fg: '#b91c1c', bg: '#fee2e2', label: 'Blocked' };
+      case 'closed':      return { fg: '#4b5563', bg: '#e5e7eb', label: 'Closed' };
+      default:            return { fg: '#374151', bg: '#f3f4f6', label: status || '' };
+    }
+  };
+
+  App.priorityBadge = function (p) {
+    if (p === null || p === undefined) return '';
+    // Beads priority is 0..4 (0 = critical, 4 = trivial) per upstream.
+    const labels = ['P0', 'P1', 'P2', 'P3', 'P4'];
+    const colors = ['#dc2626', '#ea580c', '#ca8a04', '#2563eb', '#6b7280'];
+    if (p < 0 || p > 4) return '';
+    return {
+      label: labels[p],
+      color: colors[p],
+    };
+  };
+
+  // ── Native bridge ───────────────────────────────────────────────────
+  App.postNative = function (msg) {
+    try {
+      if (window.webkit && window.webkit.messageHandlers &&
+          window.webkit.messageHandlers.beadsBridge) {
+        window.webkit.messageHandlers.beadsBridge.postMessage(msg);
+        return true;
+      }
+    } catch (e) { App.warn('bridge post failed:', e); }
+    return false;
+  };
+
+  // ── Kick-off ────────────────────────────────────────────────────────
+  // Each view sets App.onDataLoaded then we fire.
+  document.addEventListener('DOMContentLoaded', function () {
+    const pre = window.__nppBeadsPreloadedJsonl;
+    if (typeof pre === 'string') App.load(pre);
+    if (typeof App.onDataLoaded === 'function') App.onDataLoaded();
+  });
+})();

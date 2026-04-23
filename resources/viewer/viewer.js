@@ -2258,6 +2258,12 @@ function beadsApp() {
     graphHeatmapActive: false,
     graphSizeMetric: 'pagerank', // pagerank | betweenness | critical | indegree
 
+    // NppBeads graph display toggles (mirrors graph.js store.config).
+    // These need to stay in sync with the module's internal state — the
+    // Alpine root drives them, the graph module applies them.
+    graphShowFireMarks: true,
+    graphShowParticles: false,
+
     // Critical path highlighting
     showCriticalPath: false,
     criticalPathData: null, // { path: [issueIds], length: number, animating: boolean }
@@ -2314,6 +2320,15 @@ function beadsApp() {
         if (newView !== oldView && !this.selectedIssue && !this.graphDetailNode) {
           const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
           window.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+        }
+        // NppBeads: when leaving Graph, clear Find-node isolation so the
+        // graph doesn't come back filtered next time the user visits.
+        if (oldView === 'graph' && newView !== 'graph') {
+          this.graphSearchQuery = '';
+          this.graphSearchResult = null;
+          if (this.forceGraphModule?.searchAndIsolate) {
+            this.forceGraphModule.searchAndIsolate('');
+          }
         }
       });
 
@@ -2818,35 +2833,27 @@ function beadsApp() {
     /**
      * Search for a node in the graph and center on it
      */
+    // NppBeads: Find-node now ISOLATES matches + their 1-level neighbors.
+    // Empty query clears the isolation and reshows the full graph.
     graphSearchNode(query) {
-      if (!this.forceGraphModule || !this.forceGraphReady || !query) return null;
-      const graph = this.forceGraphModule.getGraph?.();
-      if (!graph) return null;
+      if (!this.forceGraphModule) return null;
+      const isolate = this.forceGraphModule.searchAndIsolate;
+      if (typeof isolate !== 'function') return null;
+      const q = (query || '').trim();
+      const res = isolate(q);
+      if (!q) return null;                          // cleared — not a "result"
+      if (!res || res.matches === 0) return null;   // no match
 
-      // Get graph data safely
-      const graphData = graph.graphData?.();
-      if (!graphData || !graphData.nodes) return null;
-
-      // Search by ID or title
-      const q = query.toLowerCase().trim();
-      if (!q) return null;
-
-      const found = graphData.nodes.find(n =>
-        (n.id && n.id.toLowerCase().includes(q)) ||
-        (n.title && n.title.toLowerCase().includes(q))
-      );
-
-      if (found && typeof found.x === 'number' && typeof found.y === 'number') {
-        // Center view on the node
-        graph.centerAt(found.x, found.y, 500);
-        graph.zoom(2, 500);
-        // Select it via the module's selection function if available
-        if (this.forceGraphModule.selectNode) {
-          this.forceGraphModule.selectNode(found.id);
+      // Re-fit view to the filtered graph after the next tick so the
+      // force simulation has time to produce coordinates.
+      setTimeout(() => {
+        const graph = this.forceGraphModule.getGraph?.();
+        if (graph && typeof graph.zoomToFit === 'function') {
+          graph.zoomToFit(400, 40);
         }
-        return found;
-      }
-      return null;
+      }, 150);
+      // Return a "found" marker for the search UI's x-show pathways.
+      return { id: q, matches: res.matches, visible: res.visible };
     },
 
     /**
@@ -3288,6 +3295,22 @@ function beadsApp() {
       }
       this.graphHeatmapActive = this.forceGraphModule.toggleHeatmap();
       showToast(this.graphHeatmapActive ? 'Heatmap ON' : 'Heatmap OFF', 'info');
+    },
+
+    // NppBeads: toggle 🔥 glyphs on P0/P1 nodes.
+    toggleGraphFireMarks() {
+      this.graphShowFireMarks = !this.graphShowFireMarks;
+      if (this.forceGraphModule?.setFireMarksEnabled) {
+        this.forceGraphModule.setFireMarksEnabled(this.graphShowFireMarks);
+      }
+    },
+
+    // NppBeads: toggle flowing link-particles animation.
+    toggleGraphParticles() {
+      this.graphShowParticles = !this.graphShowParticles;
+      if (this.forceGraphModule?.setParticlesEnabled) {
+        this.forceGraphModule.setParticlesEnabled(this.graphShowParticles);
+      }
     },
 
     /**

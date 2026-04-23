@@ -216,286 +216,9 @@
 
   <!-- Alpine.js app -->
   <div x-data="beadsApp()" x-init="init()" x-cloak>
-    <!-- Navigation header -->
-    <header class="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="flex justify-between items-center h-16">
-          <!-- Logo and title -->
-          <div class="flex items-center space-x-3">
-            <div class="w-8 h-8 bg-beads-500 rounded-lg flex items-center justify-center">
-              <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-              </svg>
-            </div>
-            <h1 class="text-lg sm:text-xl font-semibold">Beads Viewer</h1>
-          </div>
+    <!-- NppBeads: viewer header removed; navigation is provided by the panel toolbar. -->
 
-          <!-- Desktop Navigation tabs (hidden on mobile) -->
-          <nav class="hidden md:flex space-x-1">
-            <a href="#/"
-               @click.prevent="window.location.hash = '#/'"
-               :class="view === 'dashboard' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200 shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
-               class="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer hover:scale-[1.02] active:scale-95">
-              Dashboard
-            </a>
-            <a href="#/issues"
-               @click.prevent="window.location.hash = '#/issues'"
-               :class="view === 'issues' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200 shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
-               class="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer hover:scale-[1.02] active:scale-95">
-              Issues
-            </a>
-            <a href="#/insights"
-               @click.prevent="window.location.hash = '#/insights'"
-               :class="view === 'insights' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200 shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
-               class="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer hover:scale-[1.02] active:scale-95">
-              Insights
-            </a>
-            <a href="#/graph"
-               @click.prevent="window.location.hash = '#/graph'"
-               :class="view === 'graph' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200 shadow-sm' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
-               class="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer hover:scale-[1.02] active:scale-95">
-              Graph
-            </a>
-          </nav>
-
-          <!-- Actions -->
-          <div class="flex items-center space-x-2 sm:space-x-3">
-            <!-- Search (hidden on mobile, shown as icon) -->
-            <div class="hidden sm:flex items-center gap-2">
-              <div class="relative">
-                <input type="text"
-                       x-model="searchQuery"
-                       @input.debounce.300ms="search()"
-                       placeholder="Search issues..."
-                       class="w-40 lg:w-64 pl-10 pr-8 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm focus:ring-2 focus:ring-beads-500 focus:border-transparent transition-shadow">
-                <svg class="absolute left-3 top-2.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                </svg>
-                <!-- Clear search button -->
-                <button x-show="searchQuery.length > 0"
-                        x-transition:enter="transition ease-out duration-100"
-                        x-transition:enter-start="opacity-0 scale-75"
-                        x-transition:enter-end="opacity-100 scale-100"
-                        x-transition:leave="transition ease-in duration-75"
-                        x-transition:leave-start="opacity-100 scale-100"
-                        x-transition:leave-end="opacity-0 scale-75"
-                        @click="searchQuery = ''; search()"
-                        class="absolute right-2 top-2 p-0.5 rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
-                        title="Clear search">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                  </svg>
-                </button>
-              </div>
-              <select x-model="searchMode" @change="search()"
-                      class="px-2 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-xs">
-                <option value="text">Text</option>
-                <option value="hybrid">Hybrid</option>
-              </select>
-              <select x-show="searchMode === 'hybrid'" x-model="searchPreset" @change="search()"
-                      class="px-2 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-xs">
-                <option value="default">Default</option>
-                <option value="bug-hunting">Bug Hunting</option>
-                <option value="sprint-planning">Sprint Planning</option>
-                <option value="impact-first">Impact First</option>
-                <option value="text-only">Text Only</option>
-              </select>
-            </div>
-
-            <!-- Mobile search button (shows on mobile) - larger touch target -->
-            <button @click="mobileSearchOpen = !mobileSearchOpen" class="sm:hidden p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 active:bg-gray-200 dark:active:bg-gray-600">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-              </svg>
-            </button>
-
-            <!-- Help button - opens keyboard shortcuts modal -->
-            <button @click="showKeyboardHelp = true"
-                    class="p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 active:bg-gray-200 dark:active:bg-gray-600 transition-colors group"
-                    title="Help & Keyboard Shortcuts (?)"
-                    aria-label="Help and keyboard shortcuts">
-              <svg class="w-5 h-5 text-gray-600 dark:text-gray-400 group-hover:text-beads-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-              </svg>
-            </button>
-
-            <!-- Dark mode toggle - Premium animated, larger touch target -->
-            <button @click="toggleDarkMode()"
-                    class="relative p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 active:bg-gray-200 dark:active:bg-gray-600 transition-colors"
-                    title="Toggle dark mode">
-              <div class="relative w-5 h-5">
-                <svg x-show="!darkMode"
-                     x-transition:enter="transition ease-out duration-200"
-                     x-transition:enter-start="opacity-0 rotate-90 scale-50"
-                     x-transition:enter-end="opacity-100 rotate-0 scale-100"
-                     x-transition:leave="transition ease-in duration-150"
-                     x-transition:leave-start="opacity-100 rotate-0 scale-100"
-                     x-transition:leave-end="opacity-0 -rotate-90 scale-50"
-                     class="w-5 h-5 absolute inset-0 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
-                </svg>
-                <svg x-show="darkMode"
-                     x-transition:enter="transition ease-out duration-200"
-                     x-transition:enter-start="opacity-0 -rotate-90 scale-50"
-                     x-transition:enter-end="opacity-100 rotate-0 scale-100"
-                     x-transition:leave="transition ease-in duration-150"
-                     x-transition:leave-start="opacity-100 rotate-0 scale-100"
-                     x-transition:leave-end="opacity-0 rotate-90 scale-50"
-                     class="w-5 h-5 absolute inset-0 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
-                </svg>
-              </div>
-            </button>
-
-            <!-- Mobile menu button (hamburger) - larger touch target -->
-            <button @click="mobileMenuOpen = !mobileMenuOpen" class="md:hidden p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 active:bg-gray-200 dark:active:bg-gray-600">
-              <svg x-show="!mobileMenuOpen" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
-              </svg>
-              <svg x-show="mobileMenuOpen" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Mobile search bar (expandable) -->
-      <div x-show="mobileSearchOpen" x-transition class="sm:hidden px-4 pb-3 space-y-2">
-        <div class="relative">
-          <input type="text"
-                 x-model="searchQuery"
-                 @input.debounce.300ms="search()"
-                 placeholder="Search issues..."
-                 class="w-full pl-10 pr-10 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm focus:ring-2 focus:ring-beads-500 focus:border-transparent">
-          <svg class="absolute left-3 top-2.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-          </svg>
-          <!-- Clear search button (mobile) -->
-          <button x-show="searchQuery.length > 0"
-                  x-transition:enter="transition ease-out duration-100"
-                  x-transition:enter-start="opacity-0 scale-75"
-                  x-transition:enter-end="opacity-100 scale-100"
-                  x-transition:leave="transition ease-in duration-75"
-                  x-transition:leave-start="opacity-100 scale-100"
-                  x-transition:leave-end="opacity-0 scale-75"
-                  @click="searchQuery = ''; search()"
-                  class="absolute right-2 top-1.5 p-1 rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-200 dark:active:bg-gray-600 touch-btn"
-                  title="Clear search">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-        <div class="flex gap-2">
-          <select x-model="searchMode" @change="search()"
-                  class="flex-1 px-2 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-xs">
-            <option value="text">Text</option>
-            <option value="hybrid">Hybrid</option>
-          </select>
-          <select x-show="searchMode === 'hybrid'" x-model="searchPreset" @change="search()"
-                  class="flex-1 px-2 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-xs">
-            <option value="default">Default</option>
-            <option value="bug-hunting">Bug Hunting</option>
-            <option value="sprint-planning">Sprint Planning</option>
-            <option value="impact-first">Impact First</option>
-            <option value="text-only">Text Only</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Mobile navigation dropdown (hidden, using bottom nav instead) -->
-      <nav x-show="mobileMenuOpen" x-transition class="md:hidden border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
-        <div class="px-4 py-3 space-y-1">
-          <a href="#/"
-             @click.prevent="window.location.hash = '#/'; mobileMenuOpen = false"
-             :class="view === 'dashboard' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'"
-             class="block px-4 py-3 rounded-lg text-base font-medium transition-colors">
-            Dashboard
-          </a>
-          <a href="#/issues"
-             @click.prevent="window.location.hash = '#/issues'; mobileMenuOpen = false"
-             :class="view === 'issues' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'"
-             class="block px-4 py-3 rounded-lg text-base font-medium transition-colors">
-            Issues
-          </a>
-          <a href="#/insights"
-             @click.prevent="window.location.hash = '#/insights'; mobileMenuOpen = false"
-             :class="view === 'insights' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'"
-             class="block px-4 py-3 rounded-lg text-base font-medium transition-colors">
-            Insights
-          </a>
-          <a href="#/graph"
-             @click.prevent="window.location.hash = '#/graph'; mobileMenuOpen = false"
-             :class="view === 'graph' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'"
-             class="block px-4 py-3 rounded-lg text-base font-medium transition-colors">
-            Graph
-          </a>
-        </div>
-      </nav>
-    </header>
-
-    <!-- Fixed Bottom Navigation for Mobile (premium, thumb-friendly) -->
-    <nav class="md:hidden fixed bottom-0 left-0 right-0 z-40 glass border-t border-gray-200/50 dark:border-gray-700/50 safe-area-bottom"
-         x-show="view !== 'graph'"
-         x-transition:enter="transition ease-out duration-200"
-         x-transition:enter-start="translate-y-full"
-         x-transition:enter-end="translate-y-0"
-         x-transition:leave="transition ease-in duration-150"
-         x-transition:leave-start="translate-y-0"
-         x-transition:leave-end="translate-y-full">
-      <div class="flex justify-around items-center h-16 px-2">
-        <!-- Dashboard -->
-        <a href="#/"
-           @click.prevent="window.location.hash = '#/'"
-           class="nav-item-mobile haptic-light relative"
-           :class="view === 'dashboard' ? 'active' : ''">
-          <!-- Active indicator bar -->
-          <div class="absolute top-0 left-1/2 -translate-x-1/2 h-[3px] w-6 rounded-b-full transition-all duration-200"
-               :class="view === 'dashboard' ? 'bg-gradient-to-r from-beads-400 to-beads-600' : 'bg-transparent'"></div>
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" :stroke-width="view === 'dashboard' ? 2.5 : 2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
-          </svg>
-          <span class="text-[10px] mt-1 font-medium tracking-wide">Home</span>
-        </a>
-        <!-- Issues -->
-        <a href="#/issues"
-           @click.prevent="window.location.hash = '#/issues'"
-           class="nav-item-mobile haptic-light relative"
-           :class="view === 'issues' ? 'active' : ''">
-          <div class="absolute top-0 left-1/2 -translate-x-1/2 h-[3px] w-6 rounded-b-full transition-all duration-200"
-               :class="view === 'issues' ? 'bg-gradient-to-r from-beads-400 to-beads-600' : 'bg-transparent'"></div>
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" :stroke-width="view === 'issues' ? 2.5 : 2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
-          </svg>
-          <span class="text-[10px] mt-1 font-medium tracking-wide">Issues</span>
-        </a>
-        <!-- Insights -->
-        <a href="#/insights"
-           @click.prevent="window.location.hash = '#/insights'"
-           class="nav-item-mobile haptic-light relative"
-           :class="view === 'insights' ? 'active' : ''">
-          <div class="absolute top-0 left-1/2 -translate-x-1/2 h-[3px] w-6 rounded-b-full transition-all duration-200"
-               :class="view === 'insights' ? 'bg-gradient-to-r from-beads-400 to-beads-600' : 'bg-transparent'"></div>
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" :stroke-width="view === 'insights' ? 2.5 : 2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-          </svg>
-          <span class="text-[10px] mt-1 font-medium tracking-wide">Insights</span>
-        </a>
-        <!-- Graph -->
-        <a href="#/graph"
-           @click.prevent="window.location.hash = '#/graph'"
-           class="nav-item-mobile haptic-light relative"
-           :class="view === 'graph' ? 'active' : ''">
-          <div class="absolute top-0 left-1/2 -translate-x-1/2 h-[3px] w-6 rounded-b-full transition-all duration-200"
-               :class="view === 'graph' ? 'bg-gradient-to-r from-beads-400 to-beads-600' : 'bg-transparent'"></div>
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" :stroke-width="view === 'graph' ? 2.5 : 2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
-          </svg>
-          <span class="text-[10px] mt-1 font-medium tracking-wide">Graph</span>
-        </a>
-      </div>
-    </nav>
+    <!-- NppBeads: mobile bottom-nav removed; navigation is provided by the panel toolbar. -->
 
     <!-- WASM Fallback Mode Banner -->
     <div x-show="wasmStatus.fallbackMode && !loading"
@@ -704,50 +427,7 @@
             </div>
           </div>
         </div>
-
-        <!-- Explore Graph CTA - Hero Card (Premium with animation) -->
-        <div @click="view = 'graph'"
-             class="mb-6 sm:mb-8 relative overflow-hidden bg-gradient-to-br from-beads-500 via-beads-600 to-beads-700 dark:from-beads-600 dark:via-beads-700 dark:to-beads-800 rounded-2xl cursor-pointer group touch-btn haptic-medium animate-fade-in-up"
-             style="animation-delay: 100ms; box-shadow: 0 10px 40px -10px rgba(14, 165, 233, 0.4);">
-          <!-- Animated background pattern -->
-          <div class="absolute inset-0 opacity-[0.08]">
-            <svg class="w-full h-full" viewBox="0 0 400 120" preserveAspectRatio="xMidYMid slice">
-              <defs>
-                <pattern id="graph-pattern" patternUnits="userSpaceOnUse" width="50" height="50">
-                  <circle cx="25" cy="25" r="2" fill="currentColor"/>
-                  <line x1="25" y1="25" x2="50" y2="0" stroke="currentColor" stroke-width="0.5" opacity="0.5"/>
-                  <line x1="25" y1="25" x2="0" y2="50" stroke="currentColor" stroke-width="0.5" opacity="0.5"/>
-                  <line x1="25" y1="25" x2="50" y2="50" stroke="currentColor" stroke-width="0.5" opacity="0.5"/>
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#graph-pattern)" class="text-white"/>
-            </svg>
-          </div>
-          <!-- Glow effect on hover -->
-          <div class="absolute inset-0 bg-gradient-to-r from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-          <div class="relative px-5 sm:px-6 py-4 sm:py-5 flex items-center justify-between gap-4">
-            <div class="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
-              <div class="w-10 h-10 sm:w-12 sm:h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center group-active:scale-95 transition-transform shrink-0">
-                <svg class="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
-                </svg>
-              </div>
-              <div class="min-w-0">
-                <h2 class="text-base sm:text-lg font-bold text-white leading-tight">Dependency Graph</h2>
-                <p class="text-xs sm:text-sm text-white/70 leading-tight mt-0.5 line-clamp-1 sm:line-clamp-none">Visualize connections & find optimal paths</p>
-              </div>
-            </div>
-            <div class="flex items-center gap-2 text-white shrink-0">
-              <span class="hidden sm:inline text-sm font-medium opacity-80 group-hover:opacity-100 transition-opacity">Launch</span>
-              <div class="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center group-hover:bg-white/30 transition-colors">
-                <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
-                </svg>
-              </div>
-            </div>
-          </div>
-        </div>
-
+        <!-- NppBeads: Dependency Graph promo card removed (use View → Graph in panel toolbar). -->
         <!-- Quick Wins and Blockers to Clear -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-6 sm:mb-8">
           <!-- Quick Wins Card -->
@@ -2846,10 +2526,11 @@
     </main>
 
     <!-- Full-frame Graph View (outside main for full viewport) -->
+    <!-- NppBeads: top offset was 64px (upstream header we removed) — now 0 -->
     <div x-show="view === 'graph'"
          x-data="{ currentPreset: 'force', showControls: true }"
          class="fixed inset-0 z-40 bg-gray-50 dark:bg-gray-900"
-         style="top: 64px;">
+         style="top: 0;">
 
       <!-- Graph Canvas - Full viewport (shrinks when detail pane open on desktop) -->
       <div id="graph-container"
@@ -2921,6 +2602,7 @@
       <div x-show="graphDetailNode"
            x-data="{ touchStartY: 0, touchStartX: 0, touchCurrentY: 0, touchCurrentX: 0, swiping: false, isMobile: window.innerWidth < 768 }"
            x-init="window.addEventListener('resize', () => isMobile = window.innerWidth < 768)"
+           @keydown.escape.window="graphDetailNode = null; if(forceGraphModule?.clearSelection) forceGraphModule.clearSelection(); setTimeout(() => resizeForceGraph(), 250)"
            x-transition:enter="transition ease-out duration-300"
            x-transition:enter-start="md:translate-x-full translate-y-full"
            x-transition:enter-end="md:translate-x-0 translate-y-0"
@@ -2933,7 +2615,7 @@
            class="fixed z-50 flex flex-col touch-pan-y bg-white dark:bg-gray-800 shadow-2xl overflow-hidden
                   bottom-0 left-0 right-0 h-[60vh] rounded-t-2xl border-t border-gray-200 dark:border-gray-700
                   md:bottom-auto md:left-auto md:right-0 md:top-0 md:w-[400px] md:h-full md:rounded-none md:border-l md:border-t-0"
-           :style="'top: ' + (isMobile ? 'auto' : '64px')">
+           :style="'top: ' + (isMobile ? 'auto' : '0')">
 
         <!-- Swipe indicator for mobile (visual hint to swipe down to close) -->
         <div class="md:hidden w-12 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full mx-auto mt-3 mb-2 shrink-0"></div>
@@ -3055,15 +2737,7 @@
       <div class="absolute top-4 left-4 right-4 flex items-start justify-between pointer-events-none">
         <!-- Left controls -->
         <div class="pointer-events-auto flex flex-col gap-2 md:gap-3">
-          <!-- Back button - larger touch target on mobile -->
-          <button @click="view = 'dashboard'"
-                  class="flex items-center gap-2 px-3 py-2.5 md:px-4 md:py-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 active:bg-gray-100 dark:active:bg-gray-600 transition-colors min-h-[44px]">
-            <svg class="w-5 h-5 md:w-4 md:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
-            </svg>
-            <span class="text-sm font-medium hidden sm:inline">Back to Dashboard</span>
-            <span class="text-sm font-medium sm:hidden">Back</span>
-          </button>
+          <!-- NppBeads: "Back to Dashboard" button removed — panel toolbar drives navigation. -->
 
           <!-- Stats overlay - more compact on mobile -->
           <div class="bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-2 md:p-3">
@@ -3081,65 +2755,58 @@
           </div>
         </div>
 
-        <!-- Right controls - Layout presets -->
+        <!-- Right controls -->
+        <!-- NppBeads: Layout-presets panel removed; default force-directed layout is kept. -->
         <div class="pointer-events-auto">
-          <div class="bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-2">
-            <div class="text-xs text-gray-500 dark:text-gray-400 mb-2 px-1">Layout</div>
-            <div class="grid grid-cols-3 gap-1">
-              <button @click="applyGraphPreset('force'); currentPreset = 'force'"
-                      :class="currentPreset === 'force' ? 'bg-beads-100 dark:bg-beads-900 text-beads-700 dark:text-beads-300 ring-1 ring-beads-500 shadow-sm' : 'hover:bg-gray-100 dark:hover:bg-gray-700'"
-                      class="px-2 py-1.5 text-xs rounded-md transition-all duration-150 flex items-center gap-1 active:scale-95 hover:scale-[1.02]" title="Standard force-directed">
-                <span>🔄</span> Force
-              </button>
-              <button @click="applyGraphPreset('compact'); currentPreset = 'compact'"
-                      :class="currentPreset === 'compact' ? 'bg-beads-100 dark:bg-beads-900 text-beads-700 dark:text-beads-300 ring-1 ring-beads-500 shadow-sm' : 'hover:bg-gray-100 dark:hover:bg-gray-700'"
-                      class="px-2 py-1.5 text-xs rounded-md transition-all duration-150 flex items-center gap-1 active:scale-95 hover:scale-[1.02]" title="Compact DAG">
-                <span>📦</span> Compact
-              </button>
-              <button @click="applyGraphPreset('spread'); currentPreset = 'spread'"
-                      :class="currentPreset === 'spread' ? 'bg-beads-100 dark:bg-beads-900 text-beads-700 dark:text-beads-300 ring-1 ring-beads-500 shadow-sm' : 'hover:bg-gray-100 dark:hover:bg-gray-700'"
-                      class="px-2 py-1.5 text-xs rounded-md transition-all duration-150 flex items-center gap-1 active:scale-95 hover:scale-[1.02]" title="Maximum spacing">
-                <span>🌟</span> Spread
-              </button>
-              <button @click="applyGraphPreset('orthogonal'); currentPreset = 'orthogonal'"
-                      :class="currentPreset === 'orthogonal' ? 'bg-beads-100 dark:bg-beads-900 text-beads-700 dark:text-beads-300 ring-1 ring-beads-500 shadow-sm' : 'hover:bg-gray-100 dark:hover:bg-gray-700'"
-                      class="px-2 py-1.5 text-xs rounded-md transition-all duration-150 flex items-center gap-1 active:scale-95 hover:scale-[1.02]" title="Grid-aligned">
-                <span>📐</span> Grid
-              </button>
-              <button @click="applyGraphPreset('radial'); currentPreset = 'radial'"
-                      :class="currentPreset === 'radial' ? 'bg-beads-100 dark:bg-beads-900 text-beads-700 dark:text-beads-300 ring-1 ring-beads-500 shadow-sm' : 'hover:bg-gray-100 dark:hover:bg-gray-700'"
-                      class="px-2 py-1.5 text-xs rounded-md transition-all duration-150 flex items-center gap-1 active:scale-95 hover:scale-[1.02]" title="Radial from center">
-                <span>🎯</span> Radial
-              </button>
-              <button @click="applyGraphPreset('cluster'); currentPreset = 'cluster'"
-                      :class="currentPreset === 'cluster' ? 'bg-beads-100 dark:bg-beads-900 text-beads-700 dark:text-beads-300 ring-1 ring-beads-500 shadow-sm' : 'hover:bg-gray-100 dark:hover:bg-gray-700'"
-                      class="px-2 py-1.5 text-xs rounded-md transition-all duration-150 flex items-center gap-1 active:scale-95 hover:scale-[1.02]" title="Group by status">
-                <span>🔲</span> Cluster
-              </button>
-            </div>
-          </div>
+          <!-- Graph Settings panel (condensed) -->
+          <div class="bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-1.5 w-[170px]">
+            <div class="text-[10px] uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1 px-1">Display</div>
 
-          <!-- Heatmap Controls -->
-          <div class="bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-2 mt-2">
-            <div class="text-xs text-gray-500 dark:text-gray-400 mb-2 px-1">Heatmap</div>
-            <div class="flex flex-col gap-2">
-              <button @click="toggleGraphHeatmap()"
-                      :class="graphHeatmapActive ? 'bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 ring-1 ring-amber-500 shadow-sm' : 'hover:bg-gray-100 dark:hover:bg-gray-700'"
-                      class="px-2 py-1.5 text-xs rounded-md transition-all duration-150 flex items-center gap-1 w-full justify-center active:scale-95 hover:scale-[1.02]" title="Toggle heatmap coloring (H)">
-                <span>🔥</span> <span x-text="graphHeatmapActive ? 'ON' : 'OFF'"></span>
-              </button>
-              <select x-model="graphSizeMetric" @change="setGraphSizeMetric($event.target.value)"
-                      class="text-xs px-2 py-1.5 rounded-md border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200">
+            <!-- Heatmap toggle row (no fire icon; it confused users — that icon suggests fire-marks, not heatmap) -->
+            <label class="flex items-center justify-between px-1.5 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                   title="Color nodes/links by urgency/importance (H key)">
+              <span class="text-[11px] text-gray-700 dark:text-gray-300">Heatmap</span>
+              <input type="checkbox"
+                     class="w-3.5 h-3.5 accent-amber-500"
+                     :checked="graphHeatmapActive"
+                     @change="toggleGraphHeatmap()">
+            </label>
+
+            <!-- Fire marks toggle (🔥🔥 glyphs over P0/P1 nodes) -->
+            <label class="flex items-center justify-between px-1.5 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                   title="Show 🔥 glyph above P0/P1 nodes">
+              <span class="text-[11px] text-gray-700 dark:text-gray-300">Fire marks (P0/P1)</span>
+              <input type="checkbox"
+                     class="w-3.5 h-3.5 accent-red-500"
+                     :checked="graphShowFireMarks"
+                     @change="toggleGraphFireMarks()">
+            </label>
+
+            <!-- Link particles toggle -->
+            <label class="flex items-center justify-between px-1.5 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                   title="Animated dots flowing along dependency edges">
+              <span class="text-[11px] text-gray-700 dark:text-gray-300">Particles</span>
+              <input type="checkbox"
+                     class="w-3.5 h-3.5 accent-sky-500"
+                     :checked="graphShowParticles"
+                     @change="toggleGraphParticles()">
+            </label>
+
+            <!-- Metric selector + gradient — only meaningful with Heatmap on -->
+            <div class="mt-1 pt-1 border-t border-gray-200 dark:border-gray-600"
+                 :class="graphHeatmapActive ? '' : 'opacity-50'">
+              <select x-model="graphSizeMetric"
+                      @change="setGraphSizeMetric($event.target.value)"
+                      :disabled="!graphHeatmapActive"
+                      class="w-full text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200">
                 <option value="pagerank">PageRank</option>
                 <option value="betweenness">Betweenness</option>
                 <option value="critical">Critical Path</option>
                 <option value="indegree">In-Degree</option>
               </select>
-            </div>
-            <div class="mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
-              <div class="flex items-center justify-between text-xs">
+              <div class="mt-1 flex items-center gap-1 text-[9px]">
                 <span class="text-green-500">Low</span>
-                <div class="flex-1 mx-2 h-2 rounded bg-gradient-to-r from-green-500 via-yellow-500 to-red-500"></div>
+                <div class="flex-1 h-1.5 rounded bg-gradient-to-r from-green-500 via-yellow-500 to-red-500"></div>
                 <span class="text-red-500">High</span>
               </div>
             </div>
@@ -3147,30 +2814,15 @@
         </div>
       </div>
 
-      <!-- Bottom legend - hidden on mobile when detail pane is open -->
-      <div class="absolute bottom-4 left-4 pointer-events-auto transition-opacity duration-200"
+      <!-- Bottom legend — NppBeads: ~50% smaller (no md:doubling). -->
+      <div class="absolute bottom-2 left-2 pointer-events-auto transition-opacity duration-200"
            :class="graphDetailNode ? 'hidden md:block' : ''">
-        <div class="bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-2 md:p-3">
-          <div class="text-xs text-gray-500 dark:text-gray-400 mb-1.5 md:mb-2">Legend</div>
-          <div class="flex flex-wrap gap-x-3 md:gap-x-4 gap-y-1 text-[10px] md:text-xs">
-            <div class="flex items-center gap-1"><div class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full bg-green-500"></div> Open</div>
-            <div class="flex items-center gap-1"><div class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full bg-yellow-500"></div> In Progress</div>
-            <div class="flex items-center gap-1"><div class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full bg-gray-400"></div> Closed</div>
-            <div class="flex items-center gap-1"><div class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full bg-red-500"></div> Blocked</div>
-          </div>
-          <!-- Keyboard hints only on desktop -->
-          <div class="hidden md:block mt-2 pt-2 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400 space-y-1">
-            <div>Click nodes for details • Drag to pan • Scroll to zoom</div>
-            <div class="flex flex-wrap gap-x-3 gap-y-0.5">
-              <span><kbd class="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-[10px]">←→</kbd> Priority nav</span>
-              <span><kbd class="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-[10px]">↑↓</kbd> K-core nav</span>
-              <span><kbd class="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-[10px]">H</kbd> Heatmap</span>
-              <span><kbd class="px-1 py-0.5 bg-gray-200 dark:bg-gray-600 rounded text-[10px]">Esc</kbd> Deselect</span>
-            </div>
-          </div>
-          <!-- Simplified hint for mobile -->
-          <div class="md:hidden mt-1.5 pt-1.5 border-t border-gray-200 dark:border-gray-700 text-[10px] text-gray-500 dark:text-gray-400">
-            Tap nodes for details. Pinch to zoom.
+        <div class="bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-md shadow border border-gray-200 dark:border-gray-700 px-1.5 py-1">
+          <div class="flex flex-wrap gap-x-2 gap-y-0.5 text-[9px]">
+            <div class="flex items-center gap-0.5"><div class="w-1.5 h-1.5 rounded-full bg-green-500"></div> Open</div>
+            <div class="flex items-center gap-0.5"><div class="w-1.5 h-1.5 rounded-full bg-yellow-500"></div> In Progress</div>
+            <div class="flex items-center gap-0.5"><div class="w-1.5 h-1.5 rounded-full bg-gray-400"></div> Closed</div>
+            <div class="flex items-center gap-0.5"><div class="w-1.5 h-1.5 rounded-full bg-red-500"></div> Blocked</div>
           </div>
         </div>
       </div>
@@ -3232,7 +2884,7 @@
                        x-model="graphSearchQuery"
                        @input.debounce.300ms="graphSearchResult = graphSearchNode(graphSearchQuery)"
                        @keydown.enter="graphSearchResult = graphSearchNode(graphSearchQuery)"
-                       @keydown.escape="graphSearchQuery = ''; graphSearchOpen = false"
+                       @keydown.escape="graphSearchQuery = ''; graphSearchResult = null; graphSearchNode('')"
                        placeholder="Find node..."
                        class="w-32 sm:w-48 pl-8 pr-2 py-1.5 text-sm rounded-md border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 focus:ring-2 focus:ring-beads-500 focus:border-transparent">
                 <svg class="absolute left-2 top-2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3246,7 +2898,7 @@
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                 </svg>
-                <span x-text="graphSearchResult?.id"></span>
+                <span x-text="graphSearchResult ? (graphSearchResult.matches + ' match' + (graphSearchResult.matches === 1 ? '' : 'es') + ' · ' + graphSearchResult.visible + ' shown') : ''"></span>
               </div>
             </div>
           </div>

@@ -40,8 +40,12 @@ static NSString *jsStringLiteral(NSString *input) {
 @implementation BeadsPanel {
     WKWebView          *_webView;
     NSTextField        *_titleLabel;
+    NSPopUpButton      *_viewModePopup;
+    NSSearchField      *_searchField;
+    NSButton           *_themeButton;
     NSButton           *_refreshButton;
     NSButton           *_openDirButton;
+    NSButton           *_menuButton;
     NSTextField        *_statusLabel;
     NSView             *_titleBar;
     NSView             *_statusBar;
@@ -49,6 +53,10 @@ static NSString *jsStringLiteral(NSString *input) {
     JsonlDataSource       *_ds;
     BeadsWatcher          *_watcher;
     BeadsSchemeHandler    *_schemeHandler;
+
+    BeadsViewMode       _viewMode;
+    BeadsThemePref      _themePref;
+    NSString           *_lastSearchQuery;
 
     BOOL                _viewerLoaded;   // DOM ready
     BOOL                _pendingReload;  // a reload was requested before DOM ready
@@ -77,7 +85,13 @@ static NSString *jsStringLiteral(NSString *input) {
         [s reloadData];
     };
 
+    _viewMode = BeadsViewModeDashboard;
+    _lastSearchQuery = @"";
+    _themePref = (BeadsThemePref)[[NSUserDefaults standardUserDefaults]
+        integerForKey:@"NppBeadsThemePref"];  // defaults to Auto (0)
+
     [self _buildUI];
+    [self _refreshThemeButton];
     [self _loadViewer];
     [self _refreshStatusBar];
     return self;
@@ -90,12 +104,13 @@ static NSString *jsStringLiteral(NSString *input) {
     self.wantsLayer = YES;
     self.menu = [self _buildContextMenu];
 
-    // Title bar
+    // ── Toolbar row ────────────────────────────────────────────────
     _titleBar = [[NSView alloc] init];
     _titleBar.translatesAutoresizingMaskIntoConstraints = NO;
     _titleBar.wantsLayer = YES;
     [self addSubview:_titleBar];
 
+    // Project label — truncates middle so both start + extension stay readable.
     _titleLabel = [[NSTextField alloc] init];
     _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
     _titleLabel.bordered    = NO;
@@ -104,18 +119,62 @@ static NSString *jsStringLiteral(NSString *input) {
     _titleLabel.font        = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
     _titleLabel.textColor   = [NSColor secondaryLabelColor];
     _titleLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
-    _titleLabel.stringValue = @"Beads — (no project)";
+    _titleLabel.stringValue = @"(no project)";
+    [_titleLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_titleLabel setContentHuggingPriority:NSLayoutPriorityDefaultLow - 1
+                            forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_titleBar addSubview:_titleLabel];
 
-    _refreshButton  = [self _makeTitleBarButton:@"arrow.clockwise"
-                                          tooltip:@"Reload issues"
-                                           action:@selector(_didTapRefresh:)];
+    // View-mode popup — compact, 4 options.
+    _viewModePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    _viewModePopup.translatesAutoresizingMaskIntoConstraints = NO;
+    _viewModePopup.bezelStyle = NSBezelStyleRounded;
+    _viewModePopup.controlSize = NSControlSizeSmall;
+    _viewModePopup.font = [NSFont systemFontOfSize:11];
+    [_viewModePopup addItemWithTitle:@"Dashboard"]; [_viewModePopup.menu.itemArray.lastObject setTag:BeadsViewModeDashboard];
+    [_viewModePopup addItemWithTitle:@"Issues"];    [_viewModePopup.menu.itemArray.lastObject setTag:BeadsViewModeIssues];
+    [_viewModePopup addItemWithTitle:@"Insights"];  [_viewModePopup.menu.itemArray.lastObject setTag:BeadsViewModeInsights];
+    [_viewModePopup addItemWithTitle:@"Graph"];     [_viewModePopup.menu.itemArray.lastObject setTag:BeadsViewModeGraph];
+    [_viewModePopup addItemWithTitle:@"Board"];     [_viewModePopup.menu.itemArray.lastObject setTag:BeadsViewModeBoard];
+    [_viewModePopup selectItemWithTag:_viewMode];
+    _viewModePopup.target = self;
+    _viewModePopup.action = @selector(_didChangeViewMode:);
+    _viewModePopup.toolTip = @"Switch between Dashboard / Issues / Graph / Board";
+    [_titleBar addSubview:_viewModePopup];
+
+    // Search field — filters Board (and, in future, the Rich-viewer list).
+    _searchField = [[NSSearchField alloc] init];
+    _searchField.translatesAutoresizingMaskIntoConstraints = NO;
+    _searchField.controlSize = NSControlSizeSmall;
+    _searchField.font = [NSFont systemFontOfSize:11];
+    _searchField.placeholderString = @"Search beads";
+    _searchField.delegate = self;
+    _searchField.sendsSearchStringImmediately = YES;
+    _searchField.sendsWholeSearchString = NO;
+    [_searchField setContentCompressionResistancePriority:NSLayoutPriorityDefaultHigh
+                                            forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_titleBar addSubview:_searchField];
+
+    _themeButton = [self _makeTitleBarButton:@"circle.lefthalf.filled"
+                                      tooltip:@"Theme: Auto (click to cycle: Auto → Light → Dark)"
+                                       action:@selector(_didTapTheme:)];
+    [_titleBar addSubview:_themeButton];
+
+    _refreshButton = [self _makeTitleBarButton:@"arrow.clockwise"
+                                        tooltip:@"Reload issues from disk"
+                                         action:@selector(_didTapRefresh:)];
     [_titleBar addSubview:_refreshButton];
 
-    _openDirButton  = [self _makeTitleBarButton:@"folder"
-                                          tooltip:@"Reveal .beads/ in Finder"
-                                           action:@selector(openBeadsDirInFinder:)];
+    _openDirButton = [self _makeTitleBarButton:@"folder"
+                                        tooltip:@"Reveal .beads/ in Finder"
+                                         action:@selector(openBeadsDirInFinder:)];
     [_titleBar addSubview:_openDirButton];
+
+    _menuButton = [self _makeTitleBarButton:@"ellipsis.circle"
+                                      tooltip:@"More actions"
+                                       action:@selector(_didTapMenu:)];
+    [_titleBar addSubview:_menuButton];
 
     // WKWebView configured with a custom-scheme handler so the viewer is
     // served from `nppbeads://viewer/…` instead of `file://`. Same origin
@@ -136,6 +195,14 @@ static NSString *jsStringLiteral(NSString *input) {
     _webView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:config];
     _webView.translatesAutoresizingMaskIntoConstraints = NO;
     _webView.navigationDelegate = self;
+
+    // Observe URL changes so when the Rich viewer navigates internally
+    // (e.g. user clicks an issue card in Insights and viewer jumps to
+    // #/issue/bd-123), our view-mode popup reflects the new state.
+    [_webView addObserver:self
+               forKeyPath:@"URL"
+                  options:NSKeyValueObservingOptionNew
+                  context:nil];
 #if defined(__MAC_13_3) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_13_3
     if (@available(macOS 13.3, *)) {
         _webView.inspectable = YES;   // right-click → Inspect Element for debugging
@@ -161,18 +228,40 @@ static NSString *jsStringLiteral(NSString *input) {
     [_statusBar addSubview:_statusLabel];
 
     [NSLayoutConstraint activateConstraints:@[
-        // Title bar: full width, 24pt, top
+        // Toolbar: full width, 28pt, top.
         [_titleBar.topAnchor      constraintEqualToAnchor:self.topAnchor],
         [_titleBar.leadingAnchor  constraintEqualToAnchor:self.leadingAnchor],
         [_titleBar.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-        [_titleBar.heightAnchor   constraintEqualToConstant:24],
+        [_titleBar.heightAnchor   constraintEqualToConstant:28],
+
+        // Project label (leftmost, hugs start, compresses to squeeze).
         [_titleLabel.leadingAnchor constraintEqualToAnchor:_titleBar.leadingAnchor constant:8],
         [_titleLabel.centerYAnchor constraintEqualToAnchor:_titleBar.centerYAnchor],
-        [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_refreshButton.leadingAnchor constant:-6],
+        // Keep the label from growing past 40% of toolbar — otherwise it
+        // squeezes the search field down to the placeholder.
+        [_titleLabel.widthAnchor   constraintLessThanOrEqualToAnchor:_titleBar.widthAnchor multiplier:0.40],
+
+        // View mode popup immediately after the project label.
+        [_viewModePopup.leadingAnchor constraintEqualToAnchor:_titleLabel.trailingAnchor constant:6],
+        [_viewModePopup.centerYAnchor constraintEqualToAnchor:_titleBar.centerYAnchor],
+        [_viewModePopup.widthAnchor   constraintGreaterThanOrEqualToConstant:100],
+
+        // Search field flexes.
+        [_searchField.leadingAnchor   constraintEqualToAnchor:_viewModePopup.trailingAnchor constant:6],
+        [_searchField.trailingAnchor  constraintEqualToAnchor:_themeButton.leadingAnchor constant:-6],
+        [_searchField.centerYAnchor   constraintEqualToAnchor:_titleBar.centerYAnchor],
+        [_searchField.heightAnchor    constraintEqualToConstant:20],
+        [_searchField.widthAnchor     constraintGreaterThanOrEqualToConstant:60],
+
+        // Trailing cluster: theme, refresh, folder, menu.
+        [_themeButton.centerYAnchor   constraintEqualToAnchor:_titleBar.centerYAnchor],
+        [_themeButton.trailingAnchor  constraintEqualToAnchor:_refreshButton.leadingAnchor constant:-2],
         [_refreshButton.centerYAnchor constraintEqualToAnchor:_titleBar.centerYAnchor],
-        [_refreshButton.trailingAnchor constraintEqualToAnchor:_openDirButton.leadingAnchor constant:-4],
-        [_openDirButton.centerYAnchor  constraintEqualToAnchor:_titleBar.centerYAnchor],
-        [_openDirButton.trailingAnchor constraintEqualToAnchor:_titleBar.trailingAnchor constant:-6],
+        [_refreshButton.trailingAnchor constraintEqualToAnchor:_openDirButton.leadingAnchor constant:-2],
+        [_openDirButton.centerYAnchor constraintEqualToAnchor:_titleBar.centerYAnchor],
+        [_openDirButton.trailingAnchor constraintEqualToAnchor:_menuButton.leadingAnchor constant:-2],
+        [_menuButton.centerYAnchor    constraintEqualToAnchor:_titleBar.centerYAnchor],
+        [_menuButton.trailingAnchor   constraintEqualToAnchor:_titleBar.trailingAnchor constant:-6],
 
         // WebView fills the middle band.
         [_webView.topAnchor      constraintEqualToAnchor:_titleBar.bottomAnchor],
@@ -232,7 +321,8 @@ static NSString *jsStringLiteral(NSString *input) {
     }
     _lastLoadError = nil;
     _loadCount++;
-    NSLog(@"[NppBeads] _loadViewer (#%lu)", (unsigned long)_loadCount);
+    NSLog(@"[NppBeads] _loadViewer (#%lu, mode=%ld)",
+          (unsigned long)_loadCount, (long)_viewMode);
     [self _installJsonlUserScript];
 
     // Wipe caches + SW registrations so plugin file edits take effect.
@@ -247,12 +337,29 @@ static NSString *jsStringLiteral(NSString *input) {
     if (@available(macOS 11.3, *)) {
         [types addObject:WKWebsiteDataTypeServiceWorkerRegistrations];
     }
-    NSURL *url = [NSURL URLWithString:@"nppbeads://viewer/index.html"];
+    NSURL *url = [self _urlForViewMode:_viewMode];
     [ds removeDataOfTypes:types
            modifiedSince:[NSDate distantPast]
        completionHandler:^{
         [_webView loadRequest:[NSURLRequest requestWithURL:url]];
     }];
+}
+
+// Map a view mode to the nppbeads:// URL it lives at.
+- (NSURL *)_urlForViewMode:(BeadsViewMode)mode {
+    switch (mode) {
+        case BeadsViewModeDashboard:
+            return [NSURL URLWithString:@"nppbeads://viewer/index.html#/"];
+        case BeadsViewModeIssues:
+            return [NSURL URLWithString:@"nppbeads://viewer/index.html#/issues"];
+        case BeadsViewModeInsights:
+            return [NSURL URLWithString:@"nppbeads://viewer/index.html#/insights"];
+        case BeadsViewModeGraph:
+            return [NSURL URLWithString:@"nppbeads://viewer/index.html#/graph"];
+        case BeadsViewModeBoard:
+            return [NSURL URLWithString:@"nppbeads://viewer/app/board.html"];
+    }
+    return [NSURL URLWithString:@"nppbeads://viewer/index.html#/"];
 }
 
 // Inject the JSONL text + the sql-wasm.wasm bytes directly into the page
@@ -310,6 +417,26 @@ static NSString *jsStringLiteral(NSString *input) {
         initWithSource:wasmJs
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
         forMainFrameOnly:YES]];
+
+    // Theme bootstrap — run BEFORE page scripts so the viewer sees the
+    // correct `dark` class on <html> and our app views pick up the right
+    // [data-theme]. Without this there's a flash of wrong-theme.
+    BOOL dark = [self _isDarkMode];
+    NSString *themeJs = dark
+        ? @"document.documentElement.classList.add('dark');"
+           "document.documentElement.dataset.theme='dark';"
+           "try{localStorage.setItem('darkMode','true');}catch(e){}"
+        : @"document.documentElement.classList.remove('dark');"
+           "document.documentElement.dataset.theme='light';"
+           "try{localStorage.setItem('darkMode','false');}catch(e){}";
+    [ucc addUserScript:[[WKUserScript alloc]
+        initWithSource:themeJs
+        injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+        forMainFrameOnly:YES]];
+
+    // Viewer's header + mobile bottom-nav + Dependency-Graph hero card
+    // are stripped from index.html directly (search for the marker
+    // comment `<!-- NppBeads:`). No runtime CSS injection needed.
 }
 
 // Render a plain HTML page inside the webview when the real viewer can't
@@ -378,6 +505,133 @@ static NSString *jsStringLiteral(NSString *input) {
 }
 
 - (void)_didTapRefresh:(id)sender { [self reloadData]; }
+
+// View-mode popup action: navigate webview without reloading data.
+// We just change the URL; the JSONL user-script is reinstalled in case
+// the user switched projects in between, but the webview reload() vs
+// load(URL) distinction matters — we want a full URL change here.
+- (void)_didChangeViewMode:(NSPopUpButton *)sender {
+    BeadsViewMode newMode = (BeadsViewMode)sender.selectedTag;
+    if (newMode == _viewMode) return;
+    _viewMode = newMode;
+    _viewerLoaded = NO;
+    NSURL *url = [self _urlForViewMode:_viewMode];
+    NSLog(@"[NppBeads] view mode → %ld (%@)", (long)newMode, url);
+    // Make sure the JSONL user-script is refreshed (sticky across mode
+    // switches — bridge.js re-runs on every load and re-reads the
+    // WKUserScript-injected globals).
+    [self _installJsonlUserScript];
+    [_webView loadRequest:[NSURLRequest requestWithURL:url]];
+    [self _refreshTitleBar];
+}
+
+// Overflow "⋯" button reuses the right-click context menu.
+- (void)_didTapMenu:(NSButton *)sender {
+    NSPoint pt = NSMakePoint(0, sender.bounds.size.height + 2);
+    [self.menu popUpMenuPositioningItem:nil
+                             atLocation:[sender convertPoint:pt toView:nil]
+                                 inView:sender.window.contentView];
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  NSSearchFieldDelegate — live search
+// ─────────────────────────────────────────────────────────────────────────
+- (void)controlTextDidChange:(NSNotification *)note {
+    if (note.object != _searchField) return;
+    NSString *q = _searchField.stringValue ?: @"";
+    if ([q isEqualToString:_lastSearchQuery]) return;
+    _lastSearchQuery = [q copy];
+    [self _pushSearchQuery:q];
+}
+
+- (void)_pushSearchQuery:(NSString *)q {
+    // Board view uses window.__nppApp.setFilter; Rich viewer has its own
+    // FTS-backed search which we DON'T have an sqlite with FTS5 for, so
+    // Rich-view search is a Phase 3 item. For now only Board reacts.
+    if (!_viewerLoaded) return;
+    NSString *js = [NSString stringWithFormat:
+        @"if (window.__nppApp && typeof window.__nppApp.setFilter === 'function') {"
+         "  window.__nppApp.setFilter({ query: %@ });"
+         "}",
+        jsStringLiteral(q)];
+    [_webView evaluateJavaScript:js completionHandler:nil];
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Dark/light theme sync — track macOS system appearance
+// ─────────────────────────────────────────────────────────────────────────
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    [self _pushThemeToWebView];
+}
+
+- (BOOL)_isDarkMode {
+    switch (_themePref) {
+        case BeadsThemePrefLight: return NO;
+        case BeadsThemePrefDark:  return YES;
+        case BeadsThemePrefAuto:
+        default: {
+            NSAppearanceName match = [self.effectiveAppearance
+                bestMatchFromAppearancesWithNames:@[ NSAppearanceNameAqua,
+                                                     NSAppearanceNameDarkAqua ]];
+            return [match isEqualToString:NSAppearanceNameDarkAqua];
+        }
+    }
+}
+
+// Cycle Auto → Light → Dark → Auto. Persist. Reflect new state in
+// the button icon/tooltip and push a theme update to the webview.
+- (void)_didTapTheme:(id)sender {
+    _themePref = (BeadsThemePref)((_themePref + 1) % 3);
+    [[NSUserDefaults standardUserDefaults] setInteger:_themePref
+                                               forKey:@"NppBeadsThemePref"];
+    [self _refreshThemeButton];
+    [self _pushThemeToWebView];
+}
+
+- (void)_refreshThemeButton {
+    if (!_themeButton) return;
+    NSString *symbol, *tip;
+    switch (_themePref) {
+        case BeadsThemePrefLight:
+            symbol = @"sun.max";
+            tip = @"Theme: Light (click to cycle to Dark)";
+            break;
+        case BeadsThemePrefDark:
+            symbol = @"moon";
+            tip = @"Theme: Dark (click to cycle to Auto)";
+            break;
+        case BeadsThemePrefAuto:
+        default:
+            symbol = @"circle.lefthalf.filled";
+            tip = @"Theme: Auto (follows macOS) — click to cycle to Light";
+            break;
+    }
+    if (@available(macOS 11.0, *)) {
+        _themeButton.image = [NSImage imageWithSystemSymbolName:symbol
+                                     accessibilityDescription:tip];
+    }
+    _themeButton.toolTip = tip;
+}
+
+- (void)_pushThemeToWebView {
+    if (!_webView) return;
+    BOOL dark = [self _isDarkMode];
+    // The Rich viewer toggles `dark` class on <html> and reads/writes
+    // localStorage.darkMode. Our own app views read
+    // document.documentElement.dataset.theme. Update both in one pass
+    // so either surface is correct.
+    NSString *js = dark
+        ? @"document.documentElement.classList.add('dark');"
+           "document.documentElement.dataset.theme = 'dark';"
+           "try{localStorage.setItem('darkMode','true');}catch(e){}"
+           "if(window.__nppApp)window.__nppApp.setTheme('dark');"
+        : @"document.documentElement.classList.remove('dark');"
+           "document.documentElement.dataset.theme = 'light';"
+           "try{localStorage.setItem('darkMode','false');}catch(e){}"
+           "if(window.__nppApp)window.__nppApp.setTheme('light');";
+    [_webView evaluateJavaScript:js completionHandler:nil];
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Context menu (right-click anywhere in the panel)
@@ -515,16 +769,33 @@ static NSString *jsStringLiteral(NSString *input) {
 // ─────────────────────────────────────────────────────────────────────────
 - (void)_refreshTitleBar {
     if (self.project) {
-        _titleLabel.stringValue = [NSString stringWithFormat:@"Beads — %@",
-                                   self.project.projectRoot.lastPathComponent ?: @"(project)"];
-        _titleLabel.toolTip = self.project.projectRoot;
+        _titleLabel.stringValue = self.project.projectRoot.lastPathComponent ?: @"(project)";
+        _titleLabel.toolTip    = self.project.projectRoot;
         _refreshButton.enabled = YES;
         _openDirButton.enabled = YES;
+        _viewModePopup.enabled = YES;
+        _searchField.enabled   = YES;
     } else {
-        _titleLabel.stringValue = @"Beads — (no project)";
-        _titleLabel.toolTip = @"No .beads/ directory found above the active file.";
+        _titleLabel.stringValue = @"(no project)";
+        _titleLabel.toolTip    = @"Open a file inside a repo containing a .beads/ directory.";
         _refreshButton.enabled = NO;
         _openDirButton.enabled = NO;
+        _viewModePopup.enabled = NO;
+        _searchField.enabled   = NO;
+    }
+    [_viewModePopup selectItemWithTag:_viewMode];
+
+    // Phase 2: our search box filters the Board view only. Rich-Issues
+    // search needs FTS5 (not in our sql-wasm build); Dashboard / Insights
+    // are aggregates; Graph has its own "Find node…" field. Hide where
+    // it wouldn't do anything — clearer UX.
+    BOOL showSearch = (_viewMode == BeadsViewModeBoard);
+    _searchField.hidden = !showSearch;
+    if (!showSearch && _searchField.stringValue.length) {
+        // Clear any stale query so switching back to Board shows the
+        // full list.
+        _searchField.stringValue = @"";
+        _lastSearchQuery = @"";
     }
 }
 
@@ -566,6 +837,24 @@ static NSString *jsStringLiteral(NSString *input) {
             NSURL *u = [NSURL URLWithString:url];
             if (u) [[NSWorkspace sharedWorkspace] openURL:u];
         }
+    } else if ([type isEqualToString:@"openBeadDetails"]) {
+        NSString *bid = body[@"id"];
+        if ([bid isKindOfClass:[NSString class]] && bid.length > 0) {
+            // Phase 2: jump to the Rich viewer's detail route. Phase 4
+            // introduces our native Detail view which will claim this.
+            _viewMode = BeadsViewModeDashboard;   // index.html is where #/issue/… lives
+            [_viewModePopup selectItemWithTag:BeadsViewModeDashboard];
+            NSCharacterSet *safe = [NSCharacterSet URLPathAllowedCharacterSet];
+            NSString *encoded = [bid stringByAddingPercentEncodingWithAllowedCharacters:safe];
+            NSString *href = [NSString stringWithFormat:
+                @"nppbeads://viewer/index.html#/issue/%@", encoded];
+            _viewerLoaded = NO;
+            [_webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:href]]];
+        }
+    } else if ([type isEqualToString:@"updateBead"]) {
+        // Board DnD sends this. Phase 3 wires it to `bd update`. For
+        // Phase 2 we just log — board.js already did the optimistic UI.
+        NSLog(@"[NppBeads] updateBead (Phase 3): %@", body);
     } else {
         // Unknown message — ignore for forward-compat.
     }
@@ -584,6 +873,45 @@ static NSString *jsStringLiteral(NSString *input) {
 // ─────────────────────────────────────────────────────────────────────────
 //  WKNavigationDelegate — open external http(s) links in default browser
 // ─────────────────────────────────────────────────────────────────────────
+- (void)dealloc {
+    @try { [_webView removeObserver:self forKeyPath:@"URL"]; }
+    @catch (NSException *e) { /* not added */ }
+}
+
+// KVO: webView.URL changed. Map it back to a BeadsViewMode and update
+// the popup so internal navigation stays in sync with our toolbar.
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey,id> *)change
+                       context:(void *)ctx {
+    if (object != _webView || ![keyPath isEqualToString:@"URL"]) return;
+    NSURL *url = _webView.URL;
+    if (!url) return;
+    BeadsViewMode detected = [self _viewModeFromURL:url];
+    if (detected != _viewMode) {
+        _viewMode = detected;
+        [_viewModePopup selectItemWithTag:_viewMode];
+        [self _refreshTitleBar];
+    }
+}
+
+// Map a current webView URL back to the popup's view mode. Detail
+// routes (#/issue/bd-…) count as Issues since that's where detail is
+// rendered. Unknown URLs stay on current.
+- (BeadsViewMode)_viewModeFromURL:(NSURL *)url {
+    NSString *path = url.path ?: @"";
+    NSString *frag = url.fragment ?: @"";
+    if ([path hasSuffix:@"/app/board.html"]) return BeadsViewModeBoard;
+    if ([path hasSuffix:@"/index.html"] || path.length == 0) {
+        if ([frag hasPrefix:@"/graph"])    return BeadsViewModeGraph;
+        if ([frag hasPrefix:@"/insights"]) return BeadsViewModeInsights;
+        if ([frag hasPrefix:@"/issues"] ||
+            [frag hasPrefix:@"/issue/"])   return BeadsViewModeIssues;
+        return BeadsViewModeDashboard;
+    }
+    return _viewMode;
+}
+
 - (void)webView:(WKWebView *)webView
     decidePolicyForNavigationAction:(WKNavigationAction *)action
                     decisionHandler:(void (^)(WKNavigationActionPolicy))handler {
@@ -604,6 +932,9 @@ static NSString *jsStringLiteral(NSString *input) {
         _pendingReload = NO;
         [self _pushJsonlToBridge];
     }
+    // Re-apply theme + current search filter for this freshly-loaded page.
+    [self _pushThemeToWebView];
+    if (_lastSearchQuery.length) [self _pushSearchQuery:_lastSearchQuery];
 }
 
 - (void)webView:(WKWebView *)webView

@@ -1,20 +1,27 @@
 // BeadsPanel — the docked NSView that hosts the bundled beads-viewer
-// inside a WKWebView. Layout:
+// plus our native board/issues/detail views inside one WKWebView.
 //
-//   [title-row: label | refresh | open-dir | reload]    — 24pt
-//   ────────────────────────────────────────────────
-//   [WKWebView — fills]
-//   ────────────────────────────────────────────────
-//   [status-row: project · issues(open/blocked/closed)] — 18pt
+// Layout (Phase 2):
 //
-// The panel owns:
-//   - JsonlDataSource (bound to the current project)
-//   - BeadsWatcher    (re-fires on file change → reloadData)
-//   - BeadsProject    (or nil when no project)
+//   [toolbar: proj | [View ▼] | ⌕ search… | ⟳ | 📁 | ⋯ ]    — 28pt
+//   ─────────────────────────────────────────────────────
+//   [WKWebView — fills; URL varies by view mode]
+//   ─────────────────────────────────────────────────────
+//   [status-row: project · issues(open/blocked/closed)]     — 18pt
 //
-// Bridge: a WKScriptMessageHandler registered as "beadsBridge". bridge.js
-// posts {type:'getJsonl'} on first DB synth; we reply by evaluateJavaScript
-// into window.__nppBeads.receiveJsonl(text).
+// View modes map to URLs inside the nppbeads:// origin:
+//   Dashboard  → index.html#/
+//   Issues     → index.html#/issues
+//   Graph      → index.html#/graph
+//   Board      → app/board.html   (our own native-rendered kanban)
+//
+// The Rich viewer's own header + mobile-nav are hidden via CSS injection
+// (WKUserScript) so our toolbar is the sole navigation surface.
+//
+// Theme follows macOS system appearance — we override
+// `viewDidChangeEffectiveAppearance` and evaluateJavaScript into both
+// the Rich viewer (flips `dark` class on <html>, writes localStorage)
+// and our own app views (sets [data-theme]).
 
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
@@ -25,7 +32,23 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface BeadsPanel : NSView <WKNavigationDelegate, WKScriptMessageHandler>
+// Available view surfaces. Indices used as NSPopUpButton tags.
+typedef NS_ENUM(NSInteger, BeadsViewMode) {
+    BeadsViewModeDashboard = 0,   // Rich viewer — dashboard
+    BeadsViewModeIssues    = 1,   // Rich viewer — issues list
+    BeadsViewModeInsights  = 2,   // Rich viewer — insights (top-rank / cycles / etc.)
+    BeadsViewModeGraph     = 3,   // Rich viewer — force-directed graph
+    BeadsViewModeBoard     = 4,   // Native kanban
+};
+
+// User-selectable theme override. Default is Auto (track macOS appearance).
+typedef NS_ENUM(NSInteger, BeadsThemePref) {
+    BeadsThemePrefAuto  = 0,
+    BeadsThemePrefLight = 1,
+    BeadsThemePrefDark  = 2,
+};
+
+@interface BeadsPanel : NSView <WKNavigationDelegate, WKScriptMessageHandler, NSSearchFieldDelegate>
 
 // Absolute path to the plugin's `resources/` directory. Must be set via
 // the designated init — the panel uses it to `loadFileURL` during init.

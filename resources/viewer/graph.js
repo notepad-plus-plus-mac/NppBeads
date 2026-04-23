@@ -267,11 +267,21 @@ class GraphStore {
             centerStrength: 0.05,
             warmupTicks: 100,
             cooldownTicks: 300,
-            enableParticles: true,
+            // NppBeads: each of these is runtime-togglable via a panel
+            // button. enableParticles defaults off — most users find the
+            // flowing dots distracting on large graphs.
+            enableParticles: false,
             particleSpeed: 0.005,
             showLabels: true,
-            labelZoomThreshold: 0.6
+            labelZoomThreshold: 0.6,
+            // NppBeads: fire glyphs on P0/P1 nodes. On by default; users
+            // can turn off from the graph settings panel.
+            showFireMarks: true,
         };
+        // NppBeads: when non-null, only these node IDs (plus their direct
+        // neighbors) are shown — driven by the Find-node search. null
+        // means "no isolation, show everything that passes filters".
+        this.isolateNodes = null;
 
         // Animation state
         this.animationFrame = null;
@@ -966,6 +976,9 @@ function prepareGraphData(layout = null) {
 
     // Filter nodes
     let nodes = issues.filter(issue => {
+        // NppBeads isolation (Find-node) — overrides everything else.
+        if (store.isolateNodes && !store.isolateNodes.has(issue.id)) return false;
+
         // Status filter
         if (filters.status && issue.status !== filters.status) return false;
         if (!filters.showClosed && issue.status === 'closed') return false;
@@ -1190,8 +1203,8 @@ function drawNode(node, ctx, globalScale) {
     ctx.lineWidth = isSelected ? 3 : isHovered ? 2 : 1;
     ctx.stroke();
 
-    // Priority indicator (flame for P0/P1)
-    if (node.priority <= 1 && globalScale > 0.4) {
+    // Priority indicator (flame for P0/P1) — gated on config toggle
+    if (store.config.showFireMarks && node.priority <= 1 && globalScale > 0.4) {
         // Keep emoji ~12px on screen
         const emojiSize = Math.min(10, Math.max(4, 12 / globalScale));
         ctx.font = `${emojiSize}px sans-serif`;
@@ -2350,6 +2363,66 @@ export function clearFilters() {
 
 export function search(term) {
     setFilter('search', term);
+}
+
+// NppBeads: Find-node in isolation mode — hide everything except the
+// matches PLUS their 1-level direct neighbors (both directions). Pass an
+// empty/nullish term to clear isolation and re-show everything.
+export function searchAndIsolate(term) {
+    if (!term || !term.trim()) {
+        store.isolateNodes = null;
+        const graphData = prepareGraphData();
+        store.graph.graphData(graphData);
+        dispatchEvent('isolateChange', { count: 0, matches: 0 });
+        return { matches: 0, visible: graphData.nodes.length };
+    }
+    const q = term.toLowerCase().trim();
+    const matchIds = new Set();
+    for (const issue of store.issues) {
+        const hay = (issue.id + ' ' + (issue.title || '') +
+                     ' ' + (issue.description || '')).toLowerCase();
+        if (hay.includes(q)) matchIds.add(issue.id);
+    }
+    if (matchIds.size === 0) {
+        // No matches — empty graph, but leave isolateNodes non-null so a
+        // separate "clear" call is required to restore the full view.
+        store.isolateNodes = new Set();  // empty = nothing passes
+        store.graph.graphData({ nodes: [], links: [] });
+        dispatchEvent('isolateChange', { count: 0, matches: 0 });
+        return { matches: 0, visible: 0 };
+    }
+    // Expand by 1 hop on the dependency graph (undirected).
+    const keep = new Set(matchIds);
+    for (const d of store.dependencies) {
+        if (matchIds.has(d.issue_id))      keep.add(d.depends_on_id);
+        if (matchIds.has(d.depends_on_id)) keep.add(d.issue_id);
+    }
+    store.isolateNodes = keep;
+    const graphData = prepareGraphData();
+    store.graph.graphData(graphData);
+    dispatchEvent('isolateChange', { count: keep.size, matches: matchIds.size });
+    return { matches: matchIds.size, visible: graphData.nodes.length };
+}
+
+// NppBeads: runtime toggles for visual features. Both cause a graph
+// redraw so the change is immediate.
+export function setFireMarksEnabled(enabled) {
+    store.config.showFireMarks = !!enabled;
+    if (store.graph) refreshGraph();
+}
+
+export function setParticlesEnabled(enabled) {
+    store.config.enableParticles = !!enabled;
+    // linkDirectionalParticles is a per-link function; re-evaluating
+    // happens on next render. Force one by toggling the accessor.
+    if (store.graph) {
+        // Reapply the particles accessor so force-graph recomputes
+        // counts for every link instantly.
+        store.graph.linkDirectionalParticles(
+            () => store.config.enableParticles ? 2 : 0
+        );
+        refreshGraph();
+    }
 }
 
 // ============================================================================
