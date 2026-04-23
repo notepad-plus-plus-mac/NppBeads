@@ -1,6 +1,6 @@
 # NppBeads — Current Status
 
-*Last updated: 2026-04-23 (end of Phase 3)*
+*Last updated: 2026-04-23 (end of Phase 4)*
 
 ## Shipped (on `main`)
 
@@ -9,10 +9,11 @@
 | 1     | `v0.1.0`  | JSONL-backed viewer (bundled dicklesworthstone viewer, sql.js synthesis, file watcher)         |
 | 2     | *no tag*  | Native Kanban board, toolbar, theme sync, graph polish                                         |
 | 3     | *no tag*  | `bd` CLI write path: create / update / close / reopen / claim / dep add/remove                 |
+| 4     | *no tag*  | Live-sync poll · project switcher dropdown · survive no-file-open · source_repo pill           |
 
-Phase 3 is feature-complete but **untagged**. Tag as `v0.3.0` once you've
-re-tested locally after the big `--sandbox` behavior change (Phase 3's
-last commit — `7ec1480`).
+Phases 3 and 4 are feature-complete but **untagged** (project policy: no
+version bump per user direction). Re-test locally via the matrices in
+`docs/PHASE3_TEST_MATRIX.md` + `docs/PHASE4_TEST_MATRIX.md`.
 
 ## Working project tree
 
@@ -36,13 +37,14 @@ last commit — `7ec1480`).
 │       └── vendor/              # sql-wasm, alpine, d3, …
 └── src/
     ├── NppBeads.mm              # plugin entry + menu registration
-    ├── BeadsPanel.{h,mm}        # panel view, WKWebView host, bridge handlers
+    ├── BeadsPanel.{h,mm}        # panel view, WKWebView host, bridge handlers, switcher
     ├── BeadsDataSource.h        # protocol (read/write operations)
     ├── JsonlDataSource.{h,mm}   # read-only fallback (no `bd` needed)
     ├── BdDataSource.{h,mm}      # writable, wraps BdCommandRunner
     ├── BdCommandRunner.{h,mm}   # NSTask wrapper (prepends --sandbox)
-    ├── BeadsProjectScanner.mm   # walks up from file to find .beads/
+    ├── BeadsProjectScanner.mm   # walks up from file, scans recents for switcher
     ├── BeadsWatcher.mm          # dispatch_source VNODE watcher
+    ├── BeadsPoll.{h,mm}         # 2s bd list poll w/ hash-diff + focus pause
     └── BeadsSchemeHandler.mm    # nppbeads:// URL scheme → same-origin
 ```
 
@@ -60,12 +62,29 @@ last commit — `7ec1480`).
   - Close (offers force-on-blocked confirm)
   - Reopen (on closed issues)
   - Claim
+- `source_repo` chip on cross-repo cards (hidden when `.` or absent)
 
 **Status bar**
 - `<project> · N issues (o/b/c) · <backend>` where backend = `bd vX.Y.Z` or `read-only (JSONL)`
 
-**Project detection**
-- Walks up from the active file looking for `.beads/`
+**Project switcher (Phase 4)**
+- Click the project name (top-left chip with ▾) → dropdown
+- Menu offers: current · recent projects (cross-session MRU + session-seen paths + NSDocumentController recents) · **Open .beads folder…** · **Unbind current project**
+- Recents filtered on read — stale entries (deleted .beads/) get auto-pruned
+- Also available from `⋯` → "Switch project…"
+
+**Project detection (Phase 4 semantics)**
+- Walks up from the active file looking for `.beads/` — but the auto-detect
+  can only SWITCH to a matching project, never clear one. Scratch-file
+  edits and closing the last file do **not** wipe the panel. Explicit
+  unbind is the switcher's "Unbind current project" entry.
+
+**Live sync (Phase 4)**
+- 2 s bd list poll with hash-diff, pauses when the host window isn't key
+- On detected change → in-place re-broadcast (no page reload)
+- Drag-in-progress guard: poll- or watcher-triggered renders during a
+  card drag defer until dragend, preventing the dragged node from being
+  yanked
 
 ## Key performance/UX decisions
 
@@ -96,13 +115,12 @@ last commit — `7ec1480`).
 
 See `ROADMAP.md` for full detail.
 
-- **Phase 4** — Live sync + project switcher
 - **Phase 5** — Editor integration (bead-id scanner + Scintilla indicators + hover tooltips) — the real differentiator vs a standalone viewer
 - **Phase 6** — Comments + activity feed
 - **Phase 7** — Polish (saved filters, keyboard shortcuts, status-bar chip)
 - **Phase 8** — Notarization + distribution (target: `v1.0.0`)
 
-Estimated ~10–13 working days remaining to `v1.0.0` assuming no scope creep.
+Estimated ~7–10 working days remaining to `v1.0.0` assuming no scope creep.
 
 ## Build + install one-liner
 
@@ -119,4 +137,5 @@ while Notepad++ is running.
 
 - Repo: `github.com:notepad-plus-plus-mac/NppBeads.git`
 - Phase 3 final commit: `7ec1480` (Phase 3 closeout)
+- Phase 4 commits on main (no tag): `ee5931c` (BeadsPoll) · `4f30c9f` (switcher + survive no-file-open) · `2335eb0` (source_repo pill)
 - `main` is pushed and current

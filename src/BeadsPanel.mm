@@ -516,19 +516,29 @@ static const NSUInteger kBeadsRecentProjectsCap = 10;
     _activeDataSource = _ds;
     if (project.projectRoot.length) {
         _bdRunner = [[BdCommandRunner alloc] initWithProjectDir:project.projectRoot];
+        // Capture the runner locally so a rapid second bindProject: can't
+        // make this completion attach to a DIFFERENT runner. If the user
+        // flips projects while a probe is in flight, the stale completion
+        // lands with `probedRunner != self->_bdRunner` and bails — the
+        // new bindProject's probe owns the state transition.
+        BdCommandRunner *probedRunner = _bdRunner;
         __weak typeof(self) weakSelf = self;
-        [_bdRunner probeWithCompletion:^(BOOL bdPresent, BOOL projectReady) {
+        [probedRunner probeWithCompletion:^(BOOL bdPresent, BOOL projectReady) {
             __strong typeof(self) s = weakSelf;
             if (!s) return;
+            if (s->_bdRunner != probedRunner) {
+                NSLog(@"[NppBeads] probe completion ignored — superseded by later bindProject");
+                return;
+            }
             if (bdPresent && projectReady) {
-                s->_activeDataSource = [[BdDataSource alloc] initWithRunner:s->_bdRunner];
+                s->_activeDataSource = [[BdDataSource alloc] initWithRunner:probedRunner];
                 NSLog(@"[NppBeads] bd backend active — %@",
                       s->_activeDataSource.backendLabel);
                 // Phase 4: live-sync poll — 2s bd list hash-diff. Pauses
                 // whenever the host window isn't key (see
                 // _installWindowKeyStateObservers), so idle background
                 // NPPs don't spin bd.
-                s->_poll = [[BeadsPoll alloc] initWithRunner:s->_bdRunner
+                s->_poll = [[BeadsPoll alloc] initWithRunner:probedRunner
                                                   intervalMs:2000];
                 __weak typeof(s) weakS = s;
                 s->_poll.onChange = ^(NSString *payload) {
