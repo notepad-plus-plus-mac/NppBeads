@@ -337,7 +337,7 @@
       return;
     }
 
-    const card = el('div', { class: 'modal-card' });
+    const card = el('div', { class: 'modal-card modal-edit' });
 
     // Header: type icon + id + close button
     const hdr = el('div', { class: 'modal-hdr' });
@@ -351,21 +351,67 @@
     hdr.appendChild(closeBtn);
     card.appendChild(hdr);
 
-    // Title
-    card.appendChild(el('h2', { class: 'modal-title' }, b.title || '(no title)'));
-
-    // Status/priority/type/assignee row
-    card.appendChild(buildPills(b));
-
-    // Labels
-    const lab = buildLabels(b.labels);
-    if (lab) card.appendChild(lab);
-
-    // Body — description + deps + timestamps
+    // Editable body (no <form> — we post per-field on Save).
     const body = el('div', { class: 'modal-body' });
-    if (b.description) {
-      body.appendChild(el('div', { class: 'modal-desc' }, b.description));
-    }
+
+    // Title (editable)
+    const titleInput = el('input', {
+      type: 'text',
+      class: 'edit-title',
+      value: b.title || '',
+      placeholder: 'Title',
+    });
+    body.appendChild(el('label', { class: 'field' },
+      el('span', { class: 'field-label' }, 'Title'),
+      titleInput));
+
+    // Status / priority / type / assignee on one row
+    const statusSel = makeSelect('status', [
+      ['open',        'Open'],
+      ['in_progress', 'In Progress'],
+      ['blocked',     'Blocked'],
+      ['deferred',    'Deferred'],
+      ['closed',      'Closed'],
+    ], b.status);
+    const prioSel = makeSelect('priority', [
+      ['0', 'P0 — critical'],
+      ['1', 'P1 — high'],
+      ['2', 'P2 — normal'],
+      ['3', 'P3 — low'],
+      ['4', 'P4 — trivial'],
+    ], String(b.priority == null ? 2 : b.priority));
+    const typeSel = makeSelect('issueType', [
+      ['task', 'task'], ['bug', 'bug'], ['feature', 'feature'],
+      ['epic', 'epic'], ['chore', 'chore'], ['decision', 'decision'],
+    ], b.type || 'task');
+    const assigneeInput = el('input', {
+      type: 'text', class: 'edit-assignee',
+      value: b.assignee || '', placeholder: '@user',
+    });
+    const metaRow = el('div', { class: 'field-row' });
+    metaRow.appendChild(wrapField('Status',   statusSel));
+    metaRow.appendChild(wrapField('Priority', prioSel));
+    metaRow.appendChild(wrapField('Type',     typeSel));
+    metaRow.appendChild(wrapField('Assignee', assigneeInput));
+    body.appendChild(metaRow);
+
+    // Labels (comma-separated)
+    const labelsInput = el('input', {
+      type: 'text',
+      class: 'edit-labels',
+      value: (b.labels || []).join(', '),
+      placeholder: 'comma, separated, labels',
+    });
+    body.appendChild(wrapField('Labels', labelsInput));
+
+    // Description (markdown textarea)
+    const descInput = el('textarea', {
+      class: 'edit-desc', rows: '8', placeholder: 'Markdown description…',
+    });
+    descInput.value = b.description || '';
+    body.appendChild(wrapField('Description', descInput));
+
+    // Dependencies (read-only for now — add/remove is Phase 3.5)
     const deps = buildDeps(b);
     if (deps) body.appendChild(deps);
 
@@ -384,12 +430,191 @@
     }
     body.appendChild(ts);
 
+    // Action bar: status line + close/reopen/claim + cancel/save.
+    const actions = el('div', { class: 'modal-actions' });
+    const statusLine = el('span', { class: 'form-status' });
+    actions.appendChild(statusLine);
+
+    const isClosed = b.status === 'closed';
+    const toggleLabel = isClosed ? 'Reopen' : 'Close';
+    const toggleBtn = el('button', {
+      type: 'button', class: 'btn btn-secondary edit-toggle-close',
+    }, toggleLabel);
+    toggleBtn.addEventListener('click', () => {
+      if (isClosed) doReopen(b, statusLine, toggleBtn);
+      else          doClose(b,  statusLine, toggleBtn);
+    });
+    actions.appendChild(toggleBtn);
+
+    const claimBtn = el('button', {
+      type: 'button', class: 'btn btn-secondary edit-claim',
+    }, 'Claim');
+    claimBtn.addEventListener('click', () => doClaim(b, statusLine, claimBtn));
+    actions.appendChild(claimBtn);
+
+    actions.appendChild(el('button', {
+      type: 'button', class: 'btn btn-secondary',
+      onclick: closeBeadModal,
+    }, 'Cancel'));
+
+    const saveBtn = el('button', {
+      type: 'button', class: 'btn btn-primary edit-save',
+    }, 'Save');
+    saveBtn.addEventListener('click', () => {
+      const patch = diffBeadPatch(b, {
+        title:       titleInput.value.trim(),
+        status:      statusSel.value,
+        priority:    parseInt(prioSel.value, 10),
+        issueType:   typeSel.value,
+        assignee:    assigneeInput.value.trim(),
+        labels:      labelsInput.value.split(',').map(s => s.trim()).filter(Boolean),
+        description: descInput.value,
+      });
+      if (!patch) {
+        statusLine.textContent = 'no changes';
+        statusLine.classList.remove('is-error');
+        return;
+      }
+      saveBtn.disabled = true;
+      statusLine.classList.remove('is-error');
+      statusLine.textContent = 'Saving…';
+      if (!window.__nppBridge) {
+        statusLine.textContent = 'native bridge unavailable';
+        statusLine.classList.add('is-error');
+        saveBtn.disabled = false;
+        return;
+      }
+      window.__nppBridge.call('updateBead', Object.assign({ id: b.id }, patch))
+        .then((resp) => {
+          if (resp.ok) {
+            showToast(b.id + ' updated');
+            closeBeadModal();
+          } else {
+            statusLine.textContent = resp.error || 'update failed';
+            statusLine.classList.add('is-error');
+            saveBtn.disabled = false;
+          }
+        }).catch((err) => {
+          statusLine.textContent = (err && err.message) || String(err);
+          statusLine.classList.add('is-error');
+          saveBtn.disabled = false;
+        });
+    });
+    actions.appendChild(saveBtn);
+
+    body.appendChild(actions);
     card.appendChild(body);
     overlay.appendChild(card);
     document.body.appendChild(overlay);
 
-    // Esc to close
+    // Esc to close. Autofocus title — typical for a detail-edit flow.
     document.addEventListener('keydown', escCloser);
+    setTimeout(() => { titleInput.focus(); titleInput.select(); }, 0);
+  }
+
+  // ── Helpers for the edit modal ──────────────────────────────────────
+  function makeSelect(name, options, current) {
+    const sel = el('select', { name });
+    for (const [val, lbl] of options) {
+      const opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = lbl;
+      if (String(val) === String(current)) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    return sel;
+  }
+  function wrapField(label, input) {
+    return el('label', { class: 'field' },
+      el('span', { class: 'field-label' }, label),
+      input);
+  }
+
+  // Build a minimal patch by comparing form values to the bead's current
+  // state. Only keys that differ are sent — avoids pointless writes and
+  // lets bd skip the "status unchanged" path, which triggers no git
+  // activity on a save-without-changes.
+  function diffBeadPatch(orig, next) {
+    const out = {};
+    if (next.title && next.title !== (orig.title || '')) out.title = next.title;
+    if (next.status && next.status !== orig.status)      out.status = next.status;
+    const origPrio = orig.priority == null ? null : Number(orig.priority);
+    if (!Number.isNaN(next.priority) && next.priority !== origPrio) out.priority = next.priority;
+    if (next.issueType && next.issueType !== (orig.type || 'task')) out.issueType = next.issueType;
+    const origAssignee = orig.assignee || '';
+    if (next.assignee !== origAssignee) out.assignee = next.assignee;
+    const origLabels = (orig.labels || []).slice().sort().join(',');
+    const nextLabels = (next.labels || []).slice().sort().join(',');
+    if (origLabels !== nextLabels) {
+      // bd has separate add / remove lists — compute delta.
+      const origSet = new Set(orig.labels || []);
+      const nextSet = new Set(next.labels || []);
+      const add = [...nextSet].filter(l => !origSet.has(l));
+      const rm  = [...origSet].filter(l => !nextSet.has(l));
+      if (add.length) out.addLabels    = add;
+      if (rm.length)  out.removeLabels = rm;
+    }
+    if ((next.description || '') !== (orig.description || '')) {
+      out.description = next.description || '';
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
+  function doClose(bead, statusLine, btn) {
+    btn.disabled = true;
+    statusLine.classList.remove('is-error');
+    statusLine.textContent = 'Closing…';
+    if (!window.__nppBridge) { statusLine.textContent = 'bridge unavailable'; return; }
+    window.__nppBridge.call('closeBead', { id: bead.id })
+      .then((resp) => {
+        if (resp.ok) { showToast(bead.id + ' closed'); closeBeadModal(); }
+        else if (resp.errorKind === 3 /* BlockedByDeps */ && resp.blockers) {
+          if (confirm('This issue has open blockers: ' + resp.blockers.join(', ') +
+                      '. Close anyway (force)?')) {
+            statusLine.textContent = 'Closing (force)…';
+            window.__nppBridge.call('closeBead', { id: bead.id, force: true })
+              .then((r2) => {
+                if (r2.ok) { showToast(bead.id + ' closed (force)'); closeBeadModal(); }
+                else { statusLine.textContent = r2.error || 'force close failed';
+                       statusLine.classList.add('is-error'); btn.disabled = false; }
+              });
+          } else { btn.disabled = false; statusLine.textContent = ''; }
+        } else {
+          statusLine.textContent = resp.error || 'close failed';
+          statusLine.classList.add('is-error');
+          btn.disabled = false;
+        }
+      });
+  }
+  function doReopen(bead, statusLine, btn) {
+    btn.disabled = true;
+    statusLine.classList.remove('is-error');
+    statusLine.textContent = 'Reopening…';
+    if (!window.__nppBridge) return;
+    window.__nppBridge.call('reopenBead', { id: bead.id })
+      .then((resp) => {
+        if (resp.ok) { showToast(bead.id + ' reopened'); closeBeadModal(); }
+        else {
+          statusLine.textContent = resp.error || 'reopen failed';
+          statusLine.classList.add('is-error');
+          btn.disabled = false;
+        }
+      });
+  }
+  function doClaim(bead, statusLine, btn) {
+    btn.disabled = true;
+    statusLine.classList.remove('is-error');
+    statusLine.textContent = 'Claiming…';
+    if (!window.__nppBridge) return;
+    window.__nppBridge.call('claimBead', { id: bead.id })
+      .then((resp) => {
+        if (resp.ok) { showToast(bead.id + ' claimed'); closeBeadModal(); }
+        else {
+          statusLine.textContent = resp.error || 'claim failed';
+          statusLine.classList.add('is-error');
+          btn.disabled = false;
+        }
+      });
   }
 
   function escCloser(e) { if (e.key === 'Escape') closeBeadModal(); }

@@ -109,6 +109,37 @@ body { display: flex; flex-direction: column; }
   border-color: var(--accent, #2563eb);
 }
 .new-issue-modal { width: min(520px, 92vw); }
+.modal-edit { width: min(640px, 94vw); max-height: 88vh; }
+.modal-edit .modal-body { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
+.modal-edit .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.modal-edit .field-label { color: var(--text-muted); font-size: 11px; letter-spacing: 0.02em; }
+.modal-edit .field-row { display: flex; gap: 8px; }
+.modal-edit .field-row .field { flex: 1; min-width: 0; }
+.modal-edit input[type="text"],
+.modal-edit select,
+.modal-edit textarea {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  min-width: 0;
+}
+.modal-edit textarea.edit-desc {
+  resize: vertical;
+  min-height: 100px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.modal-edit input:focus,
+.modal-edit select:focus,
+.modal-edit textarea:focus {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: -1px;
+  border-color: transparent;
+}
 .new-issue-form { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; }
 .new-issue-form .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .new-issue-form .field-label { color: var(--text-muted); font-size: 11px; letter-spacing: 0.02em; }
