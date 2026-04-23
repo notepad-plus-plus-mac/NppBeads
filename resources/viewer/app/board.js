@@ -99,19 +99,42 @@
 
     const bead = App.beads.find(b => b.id === beadId);
     if (!bead) return;
-    if (effectiveStatus(bead) === newStatus) return;
+    const oldStatus = effectiveStatus(bead);
+    if (oldStatus === newStatus) return;
 
-    // Optimistic move: reflect new status immediately; native round-trip
-    // happens in Phase 3 (bd update). For Phase 2 the optimistic status
-    // persists until the page reloads — we surface a small toast so
-    // users know it's not yet persisted.
+    // Optimistic move — render instantly; then ask native to persist.
     optimistic.set(beadId, newStatus);
-    showToast(
-      'Moved "' + bead.id + '" to ' + App.statusColor(newStatus).label +
-      ' — editing requires `bd` (coming in Phase 3)'
-    );
-    App.postNative({ type: 'updateBead', id: beadId, status: newStatus });
     render();
+
+    // No bridge / no bd backend → stay optimistic + show a hint.
+    if (!window.__nppBridge) {
+      showToast('Moved ' + bead.id + ' (ephemeral — no bridge)');
+      return;
+    }
+    window.__nppBridge.call('updateBead', {
+      id: beadId,
+      status: newStatus,
+    }).then((resp) => {
+      if (resp.ok) {
+        // Real data will arrive via onRefresh broadcast from native;
+        // optimistic.delete in onRefresh handles cleanup.
+        showToast(bead.id + ' → ' + App.statusColor(newStatus).label);
+      } else {
+        // Roll back the optimistic move.
+        optimistic.delete(beadId);
+        render();
+        const msg = resp.error || 'update failed';
+        if (resp.errorKind === 1 /* ReadOnly */) {
+          showToast('Install `bd` to enable editing');
+        } else {
+          showToast(bead.id + ' · ' + msg);
+        }
+      }
+    }).catch((err) => {
+      optimistic.delete(beadId);
+      render();
+      showToast(bead.id + ' · ' + (err.message || err));
+    });
   }
 
   // ── Toggle column collapse ──────────────────────────────────────────

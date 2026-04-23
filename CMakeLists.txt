@@ -22,6 +22,8 @@ add_library(NppBeads SHARED
     src/BeadsProjectScanner.mm
     src/BeadsWatcher.mm
     src/BeadsSchemeHandler.mm
+    src/BdCommandRunner.mm
+    src/BdDataSource.mm
 )
 target_include_directories(NppBeads PRIVATE
     ${NPP_PLUGIN_INCLUDE}

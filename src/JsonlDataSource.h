@@ -8,10 +8,11 @@
 // large files (reads with streaming line-accumulation).
 
 #import <Foundation/Foundation.h>
+#import "BeadsDataSource.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface JsonlDataSource : NSObject
+@interface JsonlDataSource : NSObject <BeadsDataSource>
 
 // Absolute path to `.beads/issues.jsonl`. nil when no project is bound.
 @property (nonatomic, copy, nullable) NSString *jsonlPath;

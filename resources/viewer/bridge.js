@@ -16,7 +16,7 @@
 
   if (window.__nppBeads) return;
   const NPP = window.__nppBeads = {
-    version: 16,  // bump on every bridge.js edit to confirm the page
+    version: 17,  // bump on every bridge.js edit to confirm the page
                   // picked up the latest file (stale WebKit cache check).
     mode: 'jsonl',
     // Prefer the synchronously-preloaded JSONL (injected by BeadsPanel
@@ -530,6 +530,50 @@
       return Promise.resolve(jsonResponse({}));
     }
     return origFetch(input, init);
+  };
+
+  // ── Request/response bridge for write operations ──────────────────
+  // JS calls window.__nppBridge.call('updateBead', {id,status,...}) and
+  // awaits a Promise. Native-side BeadsPanel posts back via
+  // window.__nppBridge.resolve(reqId, payload) which fulfills the
+  // matching pending Promise. This is how Phase 3 CRUD flows: UI
+  // applies optimistic state, calls __nppBridge, rolls back on failure.
+  const pending = new Map();
+  let   reqSeq  = 0;
+  window.__nppBridge = {
+    /** Returns a Promise<{ok, bead?, error?, errorKind?, blockers?}>. */
+    call(type, payload) {
+      if (!window.webkit || !window.webkit.messageHandlers ||
+          !window.webkit.messageHandlers.beadsBridge) {
+        return Promise.reject(new Error('native bridge unavailable'));
+      }
+      const reqId = 'r' + (++reqSeq) + '_' + Date.now().toString(36);
+      const msg = Object.assign({ type, reqId }, payload || {});
+      return new Promise((resolve, reject) => {
+        // 15s timeout: if native doesn't resolve (crash, etc.) we reject
+        // rather than leave the UI frozen.
+        const timer = setTimeout(() => {
+          pending.delete(reqId);
+          reject(new Error('bridge timeout (' + type + ')'));
+        }, 15000);
+        pending.set(reqId, { resolve, reject, timer });
+        try {
+          window.webkit.messageHandlers.beadsBridge.postMessage(msg);
+        } catch (e) {
+          clearTimeout(timer);
+          pending.delete(reqId);
+          reject(e);
+        }
+      });
+    },
+    /** Native calls this via evaluateJavaScript. Shape: { ok, bead?, ... }. */
+    resolve(reqId, payload) {
+      const p = pending.get(reqId);
+      if (!p) { NPP.warn('stray resolve for ' + reqId); return; }
+      pending.delete(reqId);
+      clearTimeout(p.timer);
+      p.resolve(payload || {});
+    },
   };
 
   NPP.log('bridge.js active — mode=' + NPP.mode);

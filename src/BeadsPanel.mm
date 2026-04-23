@@ -3,6 +3,9 @@
 #import "JsonlDataSource.h"
 #import "BeadsWatcher.h"
 #import "BeadsSchemeHandler.h"
+#import "BeadsDataSource.h"
+#import "BdCommandRunner.h"
+#import "BdDataSource.h"
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Small helper: escape a string for embedding inside a JS string literal.
@@ -50,9 +53,14 @@ static NSString *jsStringLiteral(NSString *input) {
     NSView             *_titleBar;
     NSView             *_statusBar;
 
-    JsonlDataSource       *_ds;
-    BeadsWatcher          *_watcher;
-    BeadsSchemeHandler    *_schemeHandler;
+    JsonlDataSource          *_ds;          // kept — bridge.js still uses rawText preload
+    BeadsWatcher             *_watcher;
+    BeadsSchemeHandler       *_schemeHandler;
+    // Phase 3: active data source for all CRUD from webview bridges.
+    // `_bdRunner` is non-nil when bd is installed + project is usable.
+    // `_activeDataSource` points at BdDataSource then, else at _ds (JSONL).
+    BdCommandRunner          *_bdRunner;
+    id<BeadsDataSource>       _activeDataSource;
 
     BeadsViewMode       _viewMode;
     BeadsThemePref      _themePref;
@@ -466,6 +474,32 @@ static NSString *jsStringLiteral(NSString *input) {
     self.project = project;
     [_ds bindToPath:project.jsonlPath];
     [_watcher watchPath:project.jsonlPath];
+
+    // Phase 3: probe bd against the project root. Pick BdDataSource when
+    // bd is available + project has a working Dolt DB; fall back to JSONL
+    // otherwise. Probe is async, so we default to JSONL immediately and
+    // upgrade in the completion.
+    _activeDataSource = _ds;
+    if (project.projectRoot.length) {
+        _bdRunner = [[BdCommandRunner alloc] initWithProjectDir:project.projectRoot];
+        __weak typeof(self) weakSelf = self;
+        [_bdRunner probeWithCompletion:^(BOOL bdPresent, BOOL projectReady) {
+            __strong typeof(self) s = weakSelf;
+            if (!s) return;
+            if (bdPresent && projectReady) {
+                s->_activeDataSource = [[BdDataSource alloc] initWithRunner:s->_bdRunner];
+                NSLog(@"[NppBeads] bd backend active — %@",
+                      s->_activeDataSource.backendLabel);
+            } else {
+                NSLog(@"[NppBeads] JSONL fallback (bd=%d, projectReady=%d)",
+                      bdPresent, projectReady);
+            }
+            [s _refreshStatusBar];
+        }];
+    } else {
+        _bdRunner = nil;
+    }
+
     [self _refreshTitleBar];
     [self _refreshStatusBar];
     // Always reinstall the user script + reload — the JSONL is embedded
@@ -825,11 +859,13 @@ static NSString *jsStringLiteral(NSString *input) {
     NSUInteger open  = [_ds openIssueCount];
     NSUInteger blkd  = [_ds blockedIssueCount];
     NSUInteger cls   = [_ds closedIssueCount];
+    NSString *backend = _activeDataSource.backendLabel ?: @"read-only (JSONL)";
     _statusLabel.stringValue = [NSString stringWithFormat:
-        @"%@ · %lu issues (%lu open · %lu blocked · %lu closed)",
+        @"%@ · %lu issues (%lu open · %lu blocked · %lu closed) · %@",
         self.project.projectRoot.lastPathComponent ?: @"(project)",
         (unsigned long)total, (unsigned long)open,
-        (unsigned long)blkd,  (unsigned long)cls];
+        (unsigned long)blkd,  (unsigned long)cls,
+        backend];
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -864,12 +900,212 @@ static NSString *jsStringLiteral(NSString *input) {
             [_webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:href]]];
         }
     } else if ([type isEqualToString:@"updateBead"]) {
-        // Board DnD sends this. Phase 3 wires it to `bd update`. For
-        // Phase 2 we just log — board.js already did the optimistic UI.
-        NSLog(@"[NppBeads] updateBead (Phase 3): %@", body);
+        [self _handleUpdateBead:body requestId:body[@"reqId"]];
+    } else if ([type isEqualToString:@"createBead"]) {
+        [self _handleCreateBead:body requestId:body[@"reqId"]];
+    } else if ([type isEqualToString:@"closeBead"]) {
+        [self _handleCloseBead:body requestId:body[@"reqId"]];
+    } else if ([type isEqualToString:@"reopenBead"]) {
+        [self _handleReopenBead:body requestId:body[@"reqId"]];
+    } else if ([type isEqualToString:@"claimBead"]) {
+        [self _handleClaimBead:body requestId:body[@"reqId"]];
+    } else if ([type isEqualToString:@"depAdd"]) {
+        [self _handleDepAdd:body requestId:body[@"reqId"]];
+    } else if ([type isEqualToString:@"depRemove"]) {
+        [self _handleDepRemove:body requestId:body[@"reqId"]];
     } else {
         // Unknown message — ignore for forward-compat.
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Bridge: write handlers → _activeDataSource
+//
+//  Every write responds back to the webview via
+//    window.__nppBridge.resolve(reqId, {ok, bead?, error?, errorKind?, blockers?})
+//  The webview side (app.js helper in bridge.js) tracks pending requests
+//  by reqId and resolves the matching Promise. This keeps JS code
+//  write-agnostic and lets all views react uniformly.
+// ─────────────────────────────────────────────────────────────────────────
+
+- (void)_resolveRequest:(nullable NSString *)reqId
+                     ok:(BOOL)ok
+                   bead:(nullable NSDictionary *)bead
+                  error:(nullable NSError *)err {
+    if (!reqId.length) return;
+    NSMutableDictionary *payload = [NSMutableDictionary dictionary];
+    payload[@"ok"] = @(ok);
+    if (bead) payload[@"bead"] = bead;
+    if (err) {
+        payload[@"error"] = err.localizedDescription ?: @"unknown";
+        payload[@"errorKind"] = @(err.code);
+        NSArray *blockers = err.userInfo[@"blockers"];
+        if (blockers.count) payload[@"blockers"] = blockers;
+    }
+    NSError *jerr = nil;
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:payload
+                                                 options:0 error:&jerr];
+    if (!jd) return;
+    NSString *jstr = [[NSString alloc] initWithData:jd encoding:NSUTF8StringEncoding];
+    if (!jstr) return;
+    NSString *encodedReq = [reqId stringByReplacingOccurrencesOfString:@"\""
+                                                            withString:@"\\\""];
+    NSString *js = [NSString stringWithFormat:
+        @"if (window.__nppBridge && typeof window.__nppBridge.resolve === 'function') {"
+         "  window.__nppBridge.resolve(\"%@\", %@);"
+         "}", encodedReq, jstr];
+    [_webView evaluateJavaScript:js completionHandler:nil];
+}
+
+// Trigger a fresh list on all views after any successful write, so the
+// Board/Issues/Details panels catch up without waiting for the next poll.
+// CRITICAL: bd auto-exports issues.jsonl on every write (via its post-
+// commit hook). To reflect that on-disk change, we must (1) invalidate
+// the bd cache, (2) reload the JsonlDataSource so it re-reads the file,
+// and (3) push the fresh text to JS — both as the preloaded global
+// (so a subsequent navigation sees the new data) and via reload() so
+// the currently-rendered view updates now.
+- (void)_broadcastDataChanged {
+    [_activeDataSource invalidateCache];
+    [_ds reload];                         // JSONL cache — forces re-read on next rawText
+    NSString *fresh = [_ds rawText] ?: @"";
+    [self _refreshStatusBar];             // counters in status bar
+    NSString *jsLit = jsStringLiteral(fresh);
+    NSString *js = [NSString stringWithFormat:
+        @"window.__nppBeadsPreloadedJsonl = %@;"
+         "if (window.__nppApp && typeof window.__nppApp.reload === 'function') {"
+         "  window.__nppApp.reload(window.__nppBeadsPreloadedJsonl);"
+         "} else if (window.__nppBeads && typeof window.__nppBeads.receiveJsonl === 'function') {"
+         "  window.__nppBeads.receiveJsonl(window.__nppBeadsPreloadedJsonl);"
+         "}", jsLit];
+    [_webView evaluateJavaScript:js completionHandler:^(id r, NSError *e) {
+        if (e) NSLog(@"[NppBeads] _broadcastDataChanged eval error: %@", e);
+    }];
+}
+
+- (void)_handleUpdateBead:(NSDictionary *)body requestId:(NSString *)reqId {
+    NSString *bid     = [body[@"id"] isKindOfClass:[NSString class]] ? body[@"id"] : nil;
+    NSString *status  = [body[@"status"] isKindOfClass:[NSString class]] ? body[@"status"] : nil;
+    NSString *title   = [body[@"title"]  isKindOfClass:[NSString class]] ? body[@"title"]  : nil;
+    NSString *descr   = [body[@"description"] isKindOfClass:[NSString class]] ? body[@"description"] : nil;
+    NSNumber *prio    = [body[@"priority"] isKindOfClass:[NSNumber class]] ? body[@"priority"] : nil;
+    // NOTE: the bridge envelope itself uses `type` for message routing
+    // (updateBead/createBead/…), so bead-issue-type lives under
+    // `issueType`. Reading `type` here would pass the message name to
+    // `bd --type` and make every drag a bogus-type update.
+    NSString *type    = [body[@"issueType"] isKindOfClass:[NSString class]] ? body[@"issueType"] : nil;
+    NSString *assgn   = [body[@"assignee"] isKindOfClass:[NSString class]] ? body[@"assignee"] : nil;
+    NSArray  *addL    = [body[@"addLabels"]    isKindOfClass:[NSArray class]] ? body[@"addLabels"]    : nil;
+    NSArray  *rmL     = [body[@"removeLabels"] isKindOfClass:[NSArray class]] ? body[@"removeLabels"] : nil;
+
+    if (!bid.length) {
+        [self _resolveRequest:reqId ok:NO bead:nil
+                        error:[NSError errorWithDomain:BeadsDataSourceErrorDomain
+                                                  code:BeadsDataSourceErrorGeneric
+                                              userInfo:@{NSLocalizedDescriptionKey:@"missing id"}]];
+        return;
+    }
+    NSLog(@"[NppBeads] updateBead id=%@ status=%@ backend=%@",
+          bid, status ?: @"(nil)", _activeDataSource.backendLabel ?: @"?");
+    __weak typeof(self) weakSelf = self;
+    [_activeDataSource updateIssue:bid title:title description:descr status:status
+                          priority:prio type:type assignee:assgn
+                         addLabels:addL removeLabels:rmL
+                        completion:^(NSDictionary *bead, NSError *err) {
+        __strong typeof(self) s = weakSelf;
+        if (!s) return;
+        if (err) {
+            NSLog(@"[NppBeads] updateBead %@ FAILED: code=%ld msg=%@",
+                  bid, (long)err.code, err.localizedDescription);
+        } else {
+            NSLog(@"[NppBeads] updateBead %@ OK new_status=%@",
+                  bid, bead[@"status"] ?: @"(none)");
+        }
+        [s _resolveRequest:reqId ok:(err == nil) bead:bead error:err];
+        if (!err) [s _broadcastDataChanged];
+    }];
+}
+
+- (void)_handleCreateBead:(NSDictionary *)body requestId:(NSString *)reqId {
+    NSString *title = [body[@"title"] isKindOfClass:[NSString class]] ? body[@"title"] : nil;
+    NSString *type  = [body[@"issueType"] isKindOfClass:[NSString class]] ? body[@"issueType"] : nil;
+    NSNumber *prio  = [body[@"priority"] isKindOfClass:[NSNumber class]] ? body[@"priority"] : nil;
+    NSString *descr = [body[@"description"] isKindOfClass:[NSString class]] ? body[@"description"] : nil;
+    NSArray  *lbls  = [body[@"labels"] isKindOfClass:[NSArray class]] ? body[@"labels"] : nil;
+    __weak typeof(self) weakSelf = self;
+    [_activeDataSource createIssueWithTitle:title type:type priority:prio
+                                 description:descr labels:lbls
+                                  completion:^(NSDictionary *bead, NSError *err) {
+        __strong typeof(self) s = weakSelf;
+        if (!s) return;
+        [s _resolveRequest:reqId ok:(err == nil) bead:bead error:err];
+        if (!err) [s _broadcastDataChanged];
+    }];
+}
+
+- (void)_handleCloseBead:(NSDictionary *)body requestId:(NSString *)reqId {
+    NSString *bid    = [body[@"id"] isKindOfClass:[NSString class]] ? body[@"id"] : nil;
+    NSString *reason = [body[@"reason"] isKindOfClass:[NSString class]] ? body[@"reason"] : nil;
+    BOOL      force  = [body[@"force"] boolValue];
+    __weak typeof(self) weakSelf = self;
+    [_activeDataSource closeIssue:bid reason:reason force:force
+                        completion:^(NSDictionary *bead, NSError *err) {
+        __strong typeof(self) s = weakSelf;
+        if (!s) return;
+        [s _resolveRequest:reqId ok:(err == nil) bead:bead error:err];
+        if (!err) [s _broadcastDataChanged];
+    }];
+}
+
+- (void)_handleReopenBead:(NSDictionary *)body requestId:(NSString *)reqId {
+    NSString *bid    = [body[@"id"] isKindOfClass:[NSString class]] ? body[@"id"] : nil;
+    NSString *reason = [body[@"reason"] isKindOfClass:[NSString class]] ? body[@"reason"] : nil;
+    __weak typeof(self) weakSelf = self;
+    [_activeDataSource reopenIssue:bid reason:reason
+                        completion:^(NSDictionary *bead, NSError *err) {
+        __strong typeof(self) s = weakSelf;
+        if (!s) return;
+        [s _resolveRequest:reqId ok:(err == nil) bead:bead error:err];
+        if (!err) [s _broadcastDataChanged];
+    }];
+}
+
+- (void)_handleClaimBead:(NSDictionary *)body requestId:(NSString *)reqId {
+    NSString *bid = [body[@"id"] isKindOfClass:[NSString class]] ? body[@"id"] : nil;
+    __weak typeof(self) weakSelf = self;
+    [_activeDataSource claimIssue:bid completion:^(NSDictionary *bead, NSError *err) {
+        __strong typeof(self) s = weakSelf;
+        if (!s) return;
+        [s _resolveRequest:reqId ok:(err == nil) bead:bead error:err];
+        if (!err) [s _broadcastDataChanged];
+    }];
+}
+
+- (void)_handleDepAdd:(NSDictionary *)body requestId:(NSString *)reqId {
+    NSString *dep  = [body[@"dependent"]  isKindOfClass:[NSString class]] ? body[@"dependent"]  : nil;
+    NSString *dpd  = [body[@"dependency"] isKindOfClass:[NSString class]] ? body[@"dependency"] : nil;
+    NSString *kind = [body[@"depType"]    isKindOfClass:[NSString class]] ? body[@"depType"]    : @"blocks";
+    __weak typeof(self) weakSelf = self;
+    [_activeDataSource addDependencyFromIssue:dep toIssue:dpd type:kind
+                                  completion:^(NSError *err) {
+        __strong typeof(self) s = weakSelf;
+        if (!s) return;
+        [s _resolveRequest:reqId ok:(err == nil) bead:nil error:err];
+        if (!err) [s _broadcastDataChanged];
+    }];
+}
+
+- (void)_handleDepRemove:(NSDictionary *)body requestId:(NSString *)reqId {
+    NSString *dep  = [body[@"dependent"]  isKindOfClass:[NSString class]] ? body[@"dependent"]  : nil;
+    NSString *dpd  = [body[@"dependency"] isKindOfClass:[NSString class]] ? body[@"dependency"] : nil;
+    __weak typeof(self) weakSelf = self;
+    [_activeDataSource removeDependencyFromIssue:dep toIssue:dpd
+                                     completion:^(NSError *err) {
+        __strong typeof(self) s = weakSelf;
+        if (!s) return;
+        [s _resolveRequest:reqId ok:(err == nil) bead:nil error:err];
+        if (!err) [s _broadcastDataChanged];
+    }];
 }
 
 - (void)_pushJsonlToBridge {

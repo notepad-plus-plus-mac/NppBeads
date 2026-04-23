@@ -93,4 +93,76 @@
 - (NSUInteger)blockedIssueCount{ [self _loadIfNeeded]; return _cntBlocked; }
 - (NSUInteger)closedIssueCount { [self _loadIfNeeded]; return _cntClosed; }
 
+#pragma mark - BeadsDataSource protocol
+
+- (NSString *)backendLabel { return @"read-only (JSONL)"; }
+- (BOOL)writable           { return NO; }
+- (void)invalidateCache    { [self reload]; }
+
+// Build a BeadsDataSourceErrorReadOnly NSError for write attempts.
+static NSError *readOnlyError(void) {
+    return [NSError errorWithDomain:BeadsDataSourceErrorDomain
+                               code:BeadsDataSourceErrorReadOnly
+                           userInfo:@{
+        NSLocalizedDescriptionKey:
+          @"Read-only JSONL backend. Install `bd` to enable editing.",
+    }];
+}
+
+- (void)listAllIssuesWithCompletion:(void (^)(NSArray<NSDictionary *> *, NSError *))done {
+    NSArray *arr = [self issues];
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(arr, nil); });
+}
+
+- (void)showIssue:(NSString *)issueId
+       completion:(void (^)(NSDictionary *, NSError *))done {
+    NSArray *arr = [self issues];
+    NSDictionary *hit = nil;
+    for (NSDictionary *d in arr) {
+        if ([d[@"id"] isEqualToString:issueId]) { hit = d; break; }
+    }
+    if (!hit) {
+        NSError *e = [NSError errorWithDomain:BeadsDataSourceErrorDomain
+                                         code:BeadsDataSourceErrorNotFound
+                                     userInfo:@{NSLocalizedDescriptionKey:
+            [NSString stringWithFormat:@"Issue %@ not in JSONL", issueId]}];
+        dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(nil, e); });
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(hit, nil); });
+}
+
+// Every write → ReadOnly.
+- (void)createIssueWithTitle:(NSString *)t type:(NSString *)y priority:(NSNumber *)p
+                 description:(NSString *)d labels:(NSArray<NSString *> *)l
+                  completion:(void (^)(NSDictionary *, NSError *))done {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(nil, readOnlyError()); });
+}
+- (void)updateIssue:(NSString *)i title:(NSString *)t description:(NSString *)d
+             status:(NSString *)s priority:(NSNumber *)p type:(NSString *)y
+           assignee:(NSString *)a addLabels:(NSArray<NSString *> *)al
+       removeLabels:(NSArray<NSString *> *)rl
+         completion:(void (^)(NSDictionary *, NSError *))done {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(nil, readOnlyError()); });
+}
+- (void)claimIssue:(NSString *)i completion:(void (^)(NSDictionary *, NSError *))done {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(nil, readOnlyError()); });
+}
+- (void)closeIssue:(NSString *)i reason:(NSString *)r force:(BOOL)f
+        completion:(void (^)(NSDictionary *, NSError *))done {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(nil, readOnlyError()); });
+}
+- (void)reopenIssue:(NSString *)i reason:(NSString *)r
+         completion:(void (^)(NSDictionary *, NSError *))done {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(nil, readOnlyError()); });
+}
+- (void)addDependencyFromIssue:(NSString *)a toIssue:(NSString *)b type:(NSString *)t
+                   completion:(void (^)(NSError *))done {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(readOnlyError()); });
+}
+- (void)removeDependencyFromIssue:(NSString *)a toIssue:(NSString *)b
+                      completion:(void (^)(NSError *))done {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(readOnlyError()); });
+}
+
 @end
