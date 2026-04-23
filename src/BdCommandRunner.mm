@@ -286,7 +286,17 @@ static NSArray<NSString *> *collectStderrWarnings(NSString *stderrStr) {
 
     NSTask *task = [[NSTask alloc] init];
     task.launchPath = bd;
-    task.arguments  = args;
+    // Always run with --sandbox: it disables auto-sync (dolt auto-push
+    // to the git remote). Without this flag, every bd read/write hangs
+    // for ~23s on projects where git push auth fails non-interactively
+    // (which is the default state for fresh clones / private repos with
+    // no credential helper). Running local-only is the correct default
+    // for a plugin — users who want replication can `bd sync` from a
+    // terminal. --sandbox is a global flag so it prepends the subcommand.
+    NSMutableArray *finalArgs = [NSMutableArray arrayWithCapacity:args.count + 1];
+    [finalArgs addObject:@"--sandbox"];
+    [finalArgs addObjectsFromArray:args];
+    task.arguments  = finalArgs;
     task.currentDirectoryURL = [NSURL fileURLWithPath:self.projectDir
                                            isDirectory:YES];
 
