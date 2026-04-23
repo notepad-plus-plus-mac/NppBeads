@@ -110,15 +110,50 @@
   }
 
   // ── DnD handlers ────────────────────────────────────────────────────
+  // Drag-guard: when a card is being dragged, we must NOT re-render
+  // the board out from under the user's cursor — the DOM node being
+  // dragged would get replaced and the drag would die. The live-sync
+  // poll (Phase 4) and the watcher fire refreshes independently of DnD,
+  // so we defer them until dragend. See App.onRefresh below.
+  let isDraggingCard = false;
+  let pendingRefresh = false;
+  let dragWatchdog   = null;  // safety: fire a reset if dragend is missed
+
+  function _beginDragGuard() {
+    isDraggingCard = true;
+    if (dragWatchdog) clearTimeout(dragWatchdog);
+    // 8s is plenty — DnD on macOS rarely exceeds 2-3s. If we hit the
+    // watchdog, the user probably dropped outside the window and the
+    // browser swallowed the dragend. We release the guard so the next
+    // refresh isn't stuck forever.
+    dragWatchdog = setTimeout(() => {
+      dragWatchdog   = null;
+      isDraggingCard = false;
+      _flushDeferredRefresh();
+    }, 8000);
+  }
+  function _endDragGuard() {
+    isDraggingCard = false;
+    if (dragWatchdog) { clearTimeout(dragWatchdog); dragWatchdog = null; }
+    _flushDeferredRefresh();
+  }
+  function _flushDeferredRefresh() {
+    if (!pendingRefresh) return;
+    pendingRefresh = false;
+    _runRefresh();
+  }
+
   function onDragStart(e) {
     const id = e.currentTarget.dataset.beadId;
     if (!id) return;
     e.dataTransfer.setData('text/plain', id);
     e.dataTransfer.effectAllowed = 'move';
     e.currentTarget.classList.add('card-dragging');
+    _beginDragGuard();
   }
   function onDragEnd(e) {
     e.currentTarget.classList.remove('card-dragging');
+    _endDragGuard();
   }
   function onDragOver(e) {
     e.preventDefault();
@@ -973,7 +1008,10 @@
 
   // ── App wiring ──────────────────────────────────────────────────────
   App.onDataLoaded = render;
-  App.onRefresh    = function () {
+
+  // The actual refresh body, extracted so the drag-guard can defer +
+  // replay it without duplicating logic.
+  function _runRefresh() {
     // Real data arrived — drop every optimistic override, then render.
     // In Effective mode, if a card's computed state differs from the
     // column the user dragged it to, surface a toast so the snap-back
@@ -995,6 +1033,16 @@
       }
     }
     render();
+  }
+
+  App.onRefresh = function () {
+    if (isDraggingCard) {
+      // Defer; dragend will flush. Swallow newer refreshes until then —
+      // one final render after the drag is enough.
+      pendingRefresh = true;
+      return;
+    }
+    _runRefresh();
   };
   App.applyFilter  = render;
 

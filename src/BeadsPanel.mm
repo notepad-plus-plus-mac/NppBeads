@@ -6,6 +6,7 @@
 #import "BeadsDataSource.h"
 #import "BdCommandRunner.h"
 #import "BdDataSource.h"
+#import "BeadsPoll.h"
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Small helper: escape a string for embedding inside a JS string literal.
@@ -61,6 +62,7 @@ static NSString *jsStringLiteral(NSString *input) {
     // `_activeDataSource` points at BdDataSource then, else at _ds (JSONL).
     BdCommandRunner          *_bdRunner;
     id<BeadsDataSource>       _activeDataSource;
+    BeadsPoll                *_poll;            // active only when bd backend is active
 
     BeadsViewMode       _viewMode;
     BeadsThemePref      _themePref;
@@ -471,6 +473,12 @@ static NSString *jsStringLiteral(NSString *input) {
 //  Public API
 // ─────────────────────────────────────────────────────────────────────────
 - (void)bindProject:(BeadsProject *)project {
+    // Tear down any previous-project live-sync poll BEFORE changing state.
+    // BeadsPoll's -stop bumps its generation counter so any in-flight bd
+    // completion for the old project becomes a no-op.
+    [_poll stop];
+    _poll = nil;
+
     self.project = project;
     [_ds bindToPath:project.jsonlPath];
     [_watcher watchPath:project.jsonlPath];
@@ -490,6 +498,25 @@ static NSString *jsStringLiteral(NSString *input) {
                 s->_activeDataSource = [[BdDataSource alloc] initWithRunner:s->_bdRunner];
                 NSLog(@"[NppBeads] bd backend active — %@",
                       s->_activeDataSource.backendLabel);
+                // Phase 4: live-sync poll — 2s bd list hash-diff. Pauses
+                // whenever the host window isn't key (see
+                // _installWindowKeyStateObservers), so idle background
+                // NPPs don't spin bd.
+                s->_poll = [[BeadsPoll alloc] initWithRunner:s->_bdRunner
+                                                  intervalMs:2000];
+                __weak typeof(s) weakS = s;
+                s->_poll.onChange = ^(NSString *payload) {
+                    __strong typeof(s) ss = weakS;
+                    if (!ss) return;
+                    NSLog(@"[NppBeads] poll detected change (#%lu) — rebroadcasting",
+                          (unsigned long)ss->_poll.changeCount);
+                    [ss _broadcastDataChanged];
+                };
+                [s->_poll start];
+                // If the host window isn't key right now, pause immediately
+                // to match the focus invariant. resume() fires on
+                // NSWindowDidBecomeKeyNotification.
+                if (s.window && !s.window.isKeyWindow) [s->_poll pause];
             } else {
                 NSLog(@"[NppBeads] JSONL fallback (bd=%d, projectReady=%d)",
                       bdPresent, projectReady);
@@ -538,7 +565,13 @@ static NSString *jsStringLiteral(NSString *input) {
                      inFileViewerRootedAtPath:self.project.beadsDir];
 }
 
-- (void)_didTapRefresh:(id)sender { [self reloadData]; }
+- (void)_didTapRefresh:(id)sender {
+    [self reloadData];
+    // Re-baseline the poll so its next natural tick compares against
+    // post-refresh state (prevents a ghost "changed" fire right after the
+    // user hit Refresh).
+    [_poll kick];
+}
 
 // View-mode popup action: navigate webview without reloading data.
 // We just change the URL; the JSONL user-script is reinstalled in case
@@ -785,6 +818,15 @@ static NSString *jsStringLiteral(NSString *input) {
         [s appendFormat:@"_loadViewer calls: %lu\n", (unsigned long)self_->_loadCount];
         [s appendFormat:@"reloadData calls: %lu\n",  (unsigned long)self_->_reloadDataCount];
         [s appendFormat:@"watcher fires: %lu\n",    (unsigned long)self_->_watcherFireCount];
+        if (self_->_poll) {
+            [s appendFormat:@"poll: ticks=%lu changes=%lu skips(inflight)=%lu paused=%@\n",
+                (unsigned long)self_->_poll.tickCount,
+                (unsigned long)self_->_poll.changeCount,
+                (unsigned long)self_->_poll.skipInFlightCount,
+                self_->_poll.isPaused ? @"YES" : @"NO"];
+        } else {
+            [s appendString:@"poll: (not active — JSONL backend)\n"];
+        }
         [s appendString:@"\n-- bridge state (JS) --\n"];
         [s appendString:bridgeState];
         [s appendString:@"\n"];
@@ -1122,6 +1164,9 @@ static NSString *jsStringLiteral(NSString *input) {
 //  WKNavigationDelegate — open external http(s) links in default browser
 // ─────────────────────────────────────────────────────────────────────────
 - (void)dealloc {
+    [_poll stop];
+    _poll = nil;
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     @try { [_webView removeObserver:self forKeyPath:@"URL"]; }
     @catch (NSException *e) { /* not added */ }
 }
@@ -1132,14 +1177,53 @@ static NSString *jsStringLiteral(NSString *input) {
 // but its x-transition animations often leave overlays (the graph
 // detail panel, the selectedIssue modal) in a "visible-but-zombie"
 // state. We nudge Alpine to clear them.
+//
+// Also: rewire the window-key notifications so BeadsPoll pauses whenever
+// the host isn't key. Re-registered on every window change (dock/float/
+// remove) because NSNotificationCenter observers are scoped to `object:`.
 - (void)viewDidMoveToWindow {
     [super viewDidMoveToWindow];
+    [self _installWindowKeyStateObservers];
     if (!_viewerLoaded || !_webView || !self.window) return;
     [_webView evaluateJavaScript:
         @"if (typeof window.__nppClearTransientState === 'function') {"
          "  window.__nppClearTransientState();"
          "}"
         completionHandler:nil];
+}
+
+- (void)_installWindowKeyStateObservers {
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    // Drop any previous wiring. We own *all* notifications on self, so
+    // removeObserver:name:object: with nil object clears per-name fanout.
+    [nc removeObserver:self name:NSWindowDidBecomeKeyNotification  object:nil];
+    [nc removeObserver:self name:NSWindowDidResignKeyNotification object:nil];
+
+    NSWindow *w = self.window;
+    if (!w) {
+        // Moved out of any window (panel torn down / pre-init). Pause
+        // the poll defensively — nothing to display on anyway.
+        [_poll pause];
+        return;
+    }
+
+    [nc addObserver:self selector:@selector(_hostWindowBecameKey:)
+               name:NSWindowDidBecomeKeyNotification  object:w];
+    [nc addObserver:self selector:@selector(_hostWindowResignedKey:)
+               name:NSWindowDidResignKeyNotification object:w];
+
+    // Snapshot current state so we match reality (e.g. panel attached
+    // to a non-key window during a dock restore).
+    if (w.isKeyWindow) [_poll resume];
+    else               [_poll pause];
+}
+
+- (void)_hostWindowBecameKey:(NSNotification *)note {
+    [_poll resume];
+}
+
+- (void)_hostWindowResignedKey:(NSNotification *)note {
+    [_poll pause];
 }
 
 // Called by NppBeads.mm every time the user shows the panel. Resets
