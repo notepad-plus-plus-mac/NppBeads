@@ -1,0 +1,310 @@
+// NppBeads — Notepad++ macOS plugin that wraps the bundled
+// dicklesworthstone/beads_viewer inside a docked WKWebView. Auto-detects
+// `.beads/` directories from the active file path, reads issues.jsonl,
+// and synthesizes a sql.js-compatible SQLite DB on-the-fly (via bridge.js
+// — no external fetches, all assets bundled).
+//
+// Phase 1 scope: JSONL data path, auto-detect, file watcher, status bar,
+// Show/Hide panel + Refresh menu items + toolbar icon.
+
+#import <Cocoa/Cocoa.h>
+
+#include <dlfcn.h>
+#include <string>
+
+#include "NppPluginInterfaceMac.h"
+#include "Scintilla.h"
+
+#import "BeadsPanel.h"
+#import "BeadsProjectScanner.h"
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Plugin identity + menu slots
+// ─────────────────────────────────────────────────────────────────────────
+static const char *PLUGIN_NAME = "NppBeads";
+
+enum CmdIdx {
+    kCmdShowPanel = 0,
+    kCmdReload    = 1,
+    kCmdOpenDir   = 2,
+    kCmdSep       = 3,
+    kCmdAbout     = 4,
+    kCmdCount     = 5,
+};
+
+static FuncItem   sFuncItem[kCmdCount];
+static NppData    sNpp;
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Plugin state
+// ─────────────────────────────────────────────────────────────────────────
+static BeadsPanel *sPanel          = nil;
+static uint64_t    g_panelHandle   = 0;
+static NSPanel    *g_floatingPanel = nil;
+static bool        sPanelVisible   = false;
+static std::string sResourcesDir;
+static BeadsProject *sCurrentProject = nil;
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Forward decls
+// ─────────────────────────────────────────────────────────────────────────
+static void cmdTogglePanel();
+static void cmdReload();
+static void cmdOpenDir();
+static void cmdAbout();
+static void ensurePanel();
+static NSPanel *ensureFloatingPanel();
+static BOOL panelIsShown();
+static void rescanProjectFromCurrentBuffer();
+
+static inline intptr_t npp(uint32_t msg, uintptr_t w = 0, intptr_t l = 0) {
+    return sNpp._sendMessage(sNpp._nppHandle, msg, w, l);
+}
+
+// Full path of the currently-active buffer (UTF-8). Empty string when
+// no file is open OR when the message is not supported.
+static std::string currentFullPath() {
+    // MAX_PATH on the Windows API is 260; the host honours that.
+    char buf[2048] = {0};
+    npp(NPPM_GETFULLCURRENTPATH, (uintptr_t)sizeof(buf) - 1, (intptr_t)buf);
+    return std::string(buf);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Resources dir (sibling of the dylib)
+// ─────────────────────────────────────────────────────────────────────────
+static std::string resolveResourcesDir() {
+    Dl_info info = {};
+    if (dladdr((const void *)&resolveResourcesDir, &info) && info.dli_fname) {
+        std::string p = info.dli_fname;
+        auto slash = p.rfind('/');
+        if (slash != std::string::npos) return p.substr(0, slash) + "/resources";
+    }
+    return "";
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Panel hosting (docked preferred, NSPanel fallback for older hosts)
+// ─────────────────────────────────────────────────────────────────────────
+static void ensurePanel() {
+    if (sPanel) return;
+    @autoreleasepool {
+        NSString *res = [NSString stringWithUTF8String:sResourcesDir.c_str()];
+        sPanel = [[BeadsPanel alloc] initWithFrame:NSMakeRect(0, 0, 520, 720)
+                                      resourcesDir:res];
+        // Let the panel's "Hide panel" context menu item drive the same
+        // dock/float hide logic that the menu toggle uses.
+        sPanel.hideHandler = ^{
+            if (sPanelVisible) cmdTogglePanel();
+        };
+    }
+}
+
+static NSPanel *ensureFloatingPanel() {
+    if (g_floatingPanel) return g_floatingPanel;
+    ensurePanel();
+    @autoreleasepool {
+        NSRect frame = NSMakeRect(120, 120, 520, 720);
+        NSUInteger mask = NSWindowStyleMaskTitled    |
+                          NSWindowStyleMaskClosable  |
+                          NSWindowStyleMaskResizable |
+                          NSWindowStyleMaskUtilityWindow;
+        g_floatingPanel = [[NSPanel alloc] initWithContentRect:frame
+                                                      styleMask:mask
+                                                        backing:NSBackingStoreBuffered
+                                                          defer:NO];
+        g_floatingPanel.title              = @"NppBeads";
+        g_floatingPanel.hidesOnDeactivate  = NO;
+        g_floatingPanel.releasedWhenClosed = NO;
+        g_floatingPanel.level              = NSNormalWindowLevel;
+        sPanel.frame = ((NSView *)g_floatingPanel.contentView).bounds;
+        sPanel.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        [g_floatingPanel.contentView addSubview:sPanel];
+
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:NSWindowWillCloseNotification
+                       object:g_floatingPanel
+                        queue:nil
+                   usingBlock:^(NSNotification *n) {
+                       sPanelVisible = false;
+                       npp(NPPM_SETMENUITEMCHECK,
+                           (uintptr_t)sFuncItem[kCmdShowPanel]._cmdID, 0);
+                   }];
+    }
+    return g_floatingPanel;
+}
+
+static BOOL panelIsShown() {
+    if (g_panelHandle > 0) {
+        return sPanel && sPanel.window && sPanel.superview;
+    }
+    if (g_floatingPanel) return g_floatingPanel.isVisible;
+    return NO;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Project detection
+// ─────────────────────────────────────────────────────────────────────────
+static void rescanProjectFromCurrentBuffer() {
+    if (!sPanel) return;
+    std::string path = currentFullPath();
+    NSString *nsPath = path.empty() ? nil : [NSString stringWithUTF8String:path.c_str()];
+    BeadsProject *proj = [BeadsProjectScanner findProjectFromPath:nsPath];
+
+    // Avoid rebinding when we already point at the same project — the
+    // rebind triggers a page reload which wipes viewer scroll state.
+    if (proj && sCurrentProject &&
+        [proj.beadsDir isEqualToString:sCurrentProject.beadsDir]) {
+        return;
+    }
+    if (!proj && !sCurrentProject) return;
+
+    sCurrentProject = proj;
+    [sPanel bindProject:proj];
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Menu commands
+// ─────────────────────────────────────────────────────────────────────────
+static void cmdTogglePanel() {
+    ensurePanel();
+
+    if (g_panelHandle == 0 && g_floatingPanel == nil) {
+        intptr_t h = sNpp._sendMessage(sNpp._nppHandle,
+                                       NPPM_DMM_REGISTERPANEL,
+                                       (uintptr_t)(__bridge void *)sPanel,
+                                       (intptr_t)"NppBeads");
+        if (h > 0) g_panelHandle = (uint64_t)h;
+        else        ensureFloatingPanel();
+    }
+
+    BOOL currentlyShown = panelIsShown();
+    BOOL target         = !currentlyShown;
+    sPanelVisible       = target;
+    npp(NPPM_SETMENUITEMCHECK,
+        (uintptr_t)sFuncItem[kCmdShowPanel]._cmdID, target ? 1 : 0);
+
+    if (target) {
+        if (g_panelHandle > 0) {
+            sNpp._sendMessage(sNpp._nppHandle, NPPM_DMM_SHOWPANEL,
+                              (uintptr_t)g_panelHandle, 0);
+        } else if (g_floatingPanel) {
+            [g_floatingPanel orderFront:nil];
+        }
+        rescanProjectFromCurrentBuffer();
+    } else {
+        if (g_panelHandle > 0) {
+            sNpp._sendMessage(sNpp._nppHandle, NPPM_DMM_HIDEPANEL,
+                              (uintptr_t)g_panelHandle, 0);
+        } else if (g_floatingPanel) {
+            [g_floatingPanel orderOut:nil];
+        }
+    }
+}
+
+static void cmdReload() {
+    if (!sPanel) { cmdTogglePanel(); return; }
+    [sPanel reloadData];
+}
+
+static void cmdOpenDir() {
+    if (!sPanel) return;
+    [sPanel openBeadsDirInFinder:nil];
+}
+
+static void cmdAbout() {
+    @autoreleasepool {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = @"NppBeads — Beads viewer panel";
+        a.informativeText =
+            @"Embeds the dicklesworthstone beads_viewer inside a dockable\n"
+             "Notepad++ side panel. Auto-detects .beads/ above the active file\n"
+             "and reads issues.jsonl. No external fetches — fully offline.\n\n"
+             "Phase 1: JSONL data path only. SQLite/Dolt path comes in Phase 3.\n\n"
+             "Beads project: https://github.com/gastownhall/beads\n"
+             "Viewer: https://github.com/dicklesworthstone/beads_viewer";
+        [a addButtonWithTitle:@"OK"];
+        [a runModal];
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Plugin exports
+// ─────────────────────────────────────────────────────────────────────────
+static void installShortcut(ShortcutKey *out, char base) {
+    out->_isCtrl  = true;   // ⌘
+    out->_isAlt   = true;   // ⌥
+    out->_isShift = true;   // ⇧
+    out->_key     = (UCHAR)base;
+}
+
+extern "C" NPP_EXPORT void setInfo(NppData data) {
+    sNpp = data;
+    sResourcesDir = resolveResourcesDir();
+
+    memset(sFuncItem, 0, sizeof(sFuncItem));
+    auto setItem = [&](int idx, const char *name, PFUNCPLUGINCMD fn) {
+        strlcpy(sFuncItem[idx]._itemName, name, NPP_MENU_ITEM_SIZE);
+        sFuncItem[idx]._pFunc      = fn;
+        sFuncItem[idx]._init2Check = false;
+        sFuncItem[idx]._pShKey     = nullptr;
+    };
+    setItem(kCmdShowPanel, "Show Beads panel", cmdTogglePanel);
+    setItem(kCmdReload,    "Reload issues",    cmdReload);
+    setItem(kCmdOpenDir,   "Reveal .beads/ in Finder", cmdOpenDir);
+    sFuncItem[kCmdSep]._itemName[0] = '\0';
+    sFuncItem[kCmdSep]._pFunc       = nullptr;
+    setItem(kCmdAbout,     "About NppBeads",    cmdAbout);
+
+    static ShortcutKey scShow, scReload;
+    installShortcut(&scShow,   'B');
+    installShortcut(&scReload, 'R');
+    sFuncItem[kCmdShowPanel]._pShKey = &scShow;
+    sFuncItem[kCmdReload]._pShKey    = &scReload;
+}
+
+extern "C" NPP_EXPORT const char *getName() { return PLUGIN_NAME; }
+
+extern "C" NPP_EXPORT FuncItem *getFuncsArray(int *nbF) {
+    *nbF = kCmdCount;
+    return sFuncItem;
+}
+
+extern "C" NPP_EXPORT void beNotified(SCNotification *n) {
+    if (!n) return;
+    switch (n->nmhdr.code) {
+        case NPPN_TBMODIFICATION:
+            sNpp._sendMessage(sNpp._nppHandle,
+                              NPPM_ADDTOOLBARICON_FORDARKMODE,
+                              (uintptr_t)sFuncItem[kCmdShowPanel]._cmdID,
+                              (intptr_t)"toolbar.png");
+            break;
+        case NPPN_READY:
+            // Defer panel construction until the user asks for it; but if
+            // we were asked to auto-show in the future, this is where.
+            break;
+        case NPPN_BUFFERACTIVATED:
+        case NPPN_FILEOPENED:
+            if (sPanelVisible) rescanProjectFromCurrentBuffer();
+            break;
+        case NPPN_SHUTDOWN:
+            if (g_panelHandle > 0) {
+                sNpp._sendMessage(sNpp._nppHandle,
+                                  NPPM_DMM_UNREGISTERPANEL,
+                                  (uintptr_t)g_panelHandle, 0);
+                g_panelHandle = 0;
+            }
+            if (g_floatingPanel) {
+                [g_floatingPanel close];
+                g_floatingPanel = nil;
+            }
+            sPanel           = nil;
+            sCurrentProject  = nil;
+            break;
+        default: break;
+    }
+}
+
+extern "C" NPP_EXPORT intptr_t messageProc(uint32_t, uintptr_t, intptr_t) {
+    return 1;
+}
