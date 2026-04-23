@@ -65,6 +65,9 @@ typedef NS_ENUM(NSInteger, BeadsThemePref) {
 - (instancetype)initWithCoder:(NSCoder *)c NS_UNAVAILABLE;
 
 // Bind to a .beads/ project (or nil to clear). Triggers viewer reload.
+// When `project` is non-nil, its projectRoot is prepended to the
+// persisted `NppBeadsRecentProjectRoots` MRU list so it appears in the
+// project-switcher dropdown on next launch.
 - (void)bindProject:(nullable BeadsProject *)project;
 
 // Reread JSONL from disk and ask the viewer to rehydrate.
@@ -77,6 +80,12 @@ typedef NS_ENUM(NSInteger, BeadsThemePref) {
 
 // Open the .beads/ directory in Finder (menu action).
 - (void)openBeadsDirInFinder:(nullable id)sender;
+
+// Phase 4: NppBeads.mm calls this on every NPPN_BUFFERACTIVATED so we
+// accumulate the set of file paths the user has touched this session.
+// The project-switcher dropdown walks UP from each to surface candidate
+// projects without needing a filesystem tree scan. No-op on nil/empty.
+- (void)noteFileActivated:(nullable NSString *)filePath;
 
 @end
 

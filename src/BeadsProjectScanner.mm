@@ -52,4 +52,44 @@
     return nil;
 }
 
++ (nullable BeadsProject *)projectFromBeadsDir:(NSString *)beadsDir {
+    if (beadsDir.length == 0) return nil;
+    if (![self isUsableBeadsDir:beadsDir]) return nil;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    BeadsProject *p = [[BeadsProject alloc] init];
+    p.beadsDir    = [beadsDir stringByStandardizingPath];
+    p.projectRoot = [p.beadsDir stringByDeletingLastPathComponent];
+    NSString *jsonl = [p.beadsDir stringByAppendingPathComponent:@"issues.jsonl"];
+    NSString *db    = [p.beadsDir stringByAppendingPathComponent:@"beads.db"];
+    if ([fm fileExistsAtPath:jsonl]) p.jsonlPath = jsonl;
+    if ([fm fileExistsAtPath:db])    p.dbPath    = db;
+    return p;
+}
+
++ (nullable BeadsProject *)projectFromRoot:(NSString *)projectRoot {
+    if (projectRoot.length == 0) return nil;
+    NSString *beadsDir = [[projectRoot stringByStandardizingPath]
+                          stringByAppendingPathComponent:@".beads"];
+    return [self projectFromBeadsDir:beadsDir];
+}
+
++ (NSArray<BeadsProject *> *)discoverUniqueProjectsFromPaths:(NSArray<NSString *> *)paths
+                                                         max:(NSUInteger)max {
+    if (paths.count == 0 || max == 0) return @[];
+    NSMutableArray<BeadsProject *> *out = [NSMutableArray arrayWithCapacity:max];
+    // Dedupe by the .beads/ path itself (standardized) — two different
+    // file paths often resolve to the same project.
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    for (NSString *p in paths) {
+        if (out.count >= max) break;
+        BeadsProject *proj = [self findProjectFromPath:p];
+        if (!proj || proj.beadsDir.length == 0) continue;
+        NSString *key = [proj.beadsDir stringByStandardizingPath];
+        if (!key || [seen containsObject:key]) continue;
+        [seen addObject:key];
+        [out addObject:proj];
+    }
+    return out;
+}
+
 @end

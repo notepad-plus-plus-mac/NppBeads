@@ -145,19 +145,49 @@ static BOOL panelIsShown() {
 // ─────────────────────────────────────────────────────────────────────────
 //  Project detection
 // ─────────────────────────────────────────────────────────────────────────
+//
+// Phase 4 semantics: the active buffer is an *auto-detect* source only.
+// It can switch us TO a matching project, but activating a file that has
+// no .beads/ ancestor must NOT clear a project the user has bound
+// (either implicitly from a previous file or explicitly via the
+// switcher). Same for closing the last file — we stay on whatever is
+// currently bound. Users clear with "Unbind current project" in the
+// switcher menu.
+// Always-on path accumulator for the switcher's discovery. Runs whenever
+// sPanel exists, even if the panel is hidden — otherwise a user who has
+// worked on N files before ever showing the panel would have only the
+// currently-active file in the dropdown's known-paths pool.
+static void notePathActivated() {
+    if (!sPanel) return;
+    std::string path = currentFullPath();
+    if (path.empty()) return;
+    [sPanel noteFileActivated:[NSString stringWithUTF8String:path.c_str()]];
+}
+
 static void rescanProjectFromCurrentBuffer() {
     if (!sPanel) return;
     std::string path = currentFullPath();
     NSString *nsPath = path.empty() ? nil : [NSString stringWithUTF8String:path.c_str()];
     BeadsProject *proj = [BeadsProjectScanner findProjectFromPath:nsPath];
 
-    // Avoid rebinding when we already point at the same project — the
-    // rebind triggers a page reload which wipes viewer scroll state.
-    if (proj && sCurrentProject &&
-        [proj.beadsDir isEqualToString:sCurrentProject.beadsDir]) {
+    if (!proj) {
+        // No .beads/ above this file. LEAVE the current binding alone.
+        // This is the "survive no-file-open + survive scratch-file edit"
+        // invariant. Nothing to do.
         return;
     }
-    if (!proj && !sCurrentProject) return;
+
+    // Same project we already point at — noop. Rebinding would nuke the
+    // viewer's scroll/search state. IMPORTANT: we compare against the
+    // panel's live `self.project`, not a cached ivar here. The switcher
+    // can change the panel's project without going through this path,
+    // so a stale cache would cause us to skip a legitimate auto-rebind
+    // (user picks project B via switcher, then activates a file in A —
+    // A should win, but cache=A would tell us "already there").
+    if (sPanel.project && sPanel.project.beadsDir.length &&
+        [proj.beadsDir isEqualToString:sPanel.project.beadsDir]) {
+        return;
+    }
 
     sCurrentProject = proj;
     [sPanel bindProject:proj];
@@ -289,6 +319,10 @@ extern "C" NPP_EXPORT void beNotified(SCNotification *n) {
             break;
         case NPPN_BUFFERACTIVATED:
         case NPPN_FILEOPENED:
+            // Always feed the switcher's discovery pool — even when the
+            // panel is hidden — so first-show doesn't start from an
+            // empty seen-paths set.
+            notePathActivated();
             if (sPanelVisible) rescanProjectFromCurrentBuffer();
             break;
         case NPPN_SHUTDOWN:

@@ -38,6 +38,26 @@ NS_ASSUME_NONNULL_BEGIN
 // Validate that a given .beads/ actually has something we can read.
 + (BOOL)isUsableBeadsDir:(NSString *)beadsDir;
 
+// Phase 4: project switcher support.
+
+// Build a BeadsProject directly from a .beads/ directory path (e.g. the
+// one a user chose via NSOpenPanel). Returns nil if the dir doesn't
+// satisfy isUsableBeadsDir:. projectRoot is the parent of beadsDir.
++ (nullable BeadsProject *)projectFromBeadsDir:(NSString *)beadsDir;
+
+// Build a BeadsProject from a project-root directory (the parent of
+// `.beads/`). Convenience for loading from persisted `nppbeads.recentProjects`
+// entries. Returns nil if the root has no usable .beads/.
++ (nullable BeadsProject *)projectFromRoot:(NSString *)projectRoot;
+
+// Walk UP from each input path (file or directory), collect the unique
+// .beads/ ancestors found, and materialize a BeadsProject for each.
+// Deduplicates by beadsDir absolute path. Input paths that can't be
+// resolved or that don't have a .beads/ ancestor are silently skipped.
+// Caller-capped — nothing is returned beyond the first `max` projects.
++ (NSArray<BeadsProject *> *)discoverUniqueProjectsFromPaths:(NSArray<NSString *> *)paths
+                                                       max:(NSUInteger)max;
+
 @end
 
 NS_ASSUME_NONNULL_END

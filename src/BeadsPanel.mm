@@ -41,9 +41,14 @@ static NSString *jsStringLiteral(NSString *input) {
     return out;
 }
 
+// Persistent MRU of project root paths driving the switcher dropdown.
+// Capped at 10 entries.
+static NSString * const kBeadsRecentProjectsKey = @"NppBeadsRecentProjectRoots";
+static const NSUInteger kBeadsRecentProjectsCap = 10;
+
 @implementation BeadsPanel {
     WKWebView          *_webView;
-    NSTextField        *_titleLabel;
+    NSButton           *_projectChip;    // borderless button; click → switcher menu
     NSPopUpButton      *_viewModePopup;
     NSSearchField      *_searchField;
     NSButton           *_themeButton;
@@ -53,6 +58,11 @@ static NSString *jsStringLiteral(NSString *input) {
     NSTextField        *_statusLabel;
     NSView             *_titleBar;
     NSView             *_statusBar;
+
+    // Session-scoped set of file paths activated via NPPN_BUFFERACTIVATED.
+    // Feeds the switcher's "discover projects from files I've touched"
+    // path. Standardized paths (-stringByStandardizingPath).
+    NSMutableSet<NSString *> *_seenFilePaths;
 
     JsonlDataSource          *_ds;          // kept — bridge.js still uses rawText preload
     BeadsWatcher             *_watcher;
@@ -85,6 +95,7 @@ static NSString *jsStringLiteral(NSString *input) {
     _resourcesDir = [resourcesDir copy];
     _ds      = [[JsonlDataSource alloc] init];
     _watcher = [[BeadsWatcher alloc] init];
+    _seenFilePaths = [NSMutableSet setWithCapacity:32];
 
     __weak typeof(self) weakSelf = self;
     _watcher.onChange = ^{
@@ -120,21 +131,36 @@ static NSString *jsStringLiteral(NSString *input) {
     _titleBar.wantsLayer = YES;
     [self addSubview:_titleBar];
 
-    // Project label — truncates middle so both start + extension stay readable.
-    _titleLabel = [[NSTextField alloc] init];
-    _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _titleLabel.bordered    = NO;
-    _titleLabel.editable    = NO;
-    _titleLabel.drawsBackground = NO;
-    _titleLabel.font        = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
-    _titleLabel.textColor   = [NSColor secondaryLabelColor];
-    _titleLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
-    _titleLabel.stringValue = @"(no project)";
-    [_titleLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [_titleLabel setContentHuggingPriority:NSLayoutPriorityDefaultLow - 1
-                            forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [_titleBar addSubview:_titleLabel];
+    // Project chip — borderless button that doubles as the project label
+    // AND the switcher dropdown trigger (click → menu of recents +
+    // Open / Clear). Middle-truncated so long paths still show both ends.
+    _projectChip = [[NSButton alloc] init];
+    _projectChip.translatesAutoresizingMaskIntoConstraints = NO;
+    _projectChip.bezelStyle    = NSBezelStyleInline;
+    _projectChip.bordered      = NO;
+    _projectChip.font          = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    _projectChip.contentTintColor = [NSColor secondaryLabelColor];
+    _projectChip.alignment     = NSTextAlignmentLeft;
+    _projectChip.imagePosition = NSImageRight;
+    _projectChip.imageScaling  = NSImageScaleProportionallyDown;
+    if (@available(macOS 11.0, *)) {
+        NSImage *chev = [NSImage imageWithSystemSymbolName:@"chevron.down"
+                                   accessibilityDescription:@"Switch project"];
+        NSImageSymbolConfiguration *cfg =
+            [NSImageSymbolConfiguration configurationWithPointSize:8
+                                                            weight:NSFontWeightSemibold];
+        _projectChip.image = [chev imageWithSymbolConfiguration:cfg];
+    }
+    _projectChip.title         = @"(no project)";
+    _projectChip.cell.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    _projectChip.cell.controlSize   = NSControlSizeSmall;
+    _projectChip.target = self;
+    _projectChip.action = @selector(_didTapProjectChip:);
+    [_projectChip setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                            forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_projectChip setContentHuggingPriority:NSLayoutPriorityDefaultLow - 1
+                              forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_titleBar addSubview:_projectChip];
 
     // View-mode popup — compact, 4 options.
     _viewModePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
@@ -244,15 +270,15 @@ static NSString *jsStringLiteral(NSString *input) {
         [_titleBar.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
         [_titleBar.heightAnchor   constraintEqualToConstant:28],
 
-        // Project label (leftmost, hugs start, compresses to squeeze).
-        [_titleLabel.leadingAnchor constraintEqualToAnchor:_titleBar.leadingAnchor constant:8],
-        [_titleLabel.centerYAnchor constraintEqualToAnchor:_titleBar.centerYAnchor],
-        // Keep the label from growing past 40% of toolbar — otherwise it
+        // Project chip (leftmost, hugs start, compresses to squeeze).
+        [_projectChip.leadingAnchor constraintEqualToAnchor:_titleBar.leadingAnchor constant:8],
+        [_projectChip.centerYAnchor constraintEqualToAnchor:_titleBar.centerYAnchor],
+        // Keep the chip from growing past 40% of toolbar — otherwise it
         // squeezes the search field down to the placeholder.
-        [_titleLabel.widthAnchor   constraintLessThanOrEqualToAnchor:_titleBar.widthAnchor multiplier:0.40],
+        [_projectChip.widthAnchor   constraintLessThanOrEqualToAnchor:_titleBar.widthAnchor multiplier:0.40],
 
-        // View mode popup immediately after the project label.
-        [_viewModePopup.leadingAnchor constraintEqualToAnchor:_titleLabel.trailingAnchor constant:6],
+        // View mode popup immediately after the project chip.
+        [_viewModePopup.leadingAnchor constraintEqualToAnchor:_projectChip.trailingAnchor constant:6],
         [_viewModePopup.centerYAnchor constraintEqualToAnchor:_titleBar.centerYAnchor],
         [_viewModePopup.widthAnchor   constraintGreaterThanOrEqualToConstant:100],
 
@@ -527,6 +553,13 @@ static NSString *jsStringLiteral(NSString *input) {
         _bdRunner = nil;
     }
 
+    // Record this bind in the cross-session MRU so the switcher dropdown
+    // can offer it on next launch. Nil binds (explicit unbind or
+    // unusable project) are NOT recorded.
+    if (project.projectRoot.length) {
+        [BeadsPanel _recordRecentProjectRoot:project.projectRoot];
+    }
+
     [self _refreshTitleBar];
     [self _refreshStatusBar];
     // Always reinstall the user script + reload — the JSONL is embedded
@@ -722,6 +755,8 @@ static NSString *jsStringLiteral(NSString *input) {
         it.target = self;
         return it;
     };
+    add(@"Switch project…",                @selector(_didTapProjectChip:));
+    [m addItem:[NSMenuItem separatorItem]];
     add(@"Reload issues from disk",        @selector(ctxReloadIssues:));
     add(@"Reload viewer",                  @selector(ctxReloadViewer:));
     [m addItem:[NSMenuItem separatorItem]];
@@ -853,24 +888,258 @@ static NSString *jsStringLiteral(NSString *input) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+//  Phase 4 — Project switcher (dropdown attached to the project chip)
+// ─────────────────────────────────────────────────────────────────────────
+
+- (void)noteFileActivated:(NSString *)filePath {
+    if (filePath.length == 0) return;
+    NSString *std = [filePath stringByStandardizingPath];
+    if (!std) return;
+    // Unbounded growth is fine — NSMutableSet of strings at realistic
+    // scale (a few thousand paths) is well under 1 MB and discovery
+    // dedupes on beadsDir anyway. Worst case: we scan more candidates,
+    // which is capped inside _buildProjectSwitcherMenu.
+    [_seenFilePaths addObject:std];
+}
+
+// MRU helpers — persist last-N bound project roots to NSUserDefaults.
+
++ (NSArray<NSString *> *)_persistedRecentProjectRoots {
+    NSArray *arr = [[NSUserDefaults standardUserDefaults]
+                    arrayForKey:kBeadsRecentProjectsKey];
+    if (![arr isKindOfClass:[NSArray class]] || arr.count == 0) return @[];
+    NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:arr.count];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (id entry in arr) {
+        if (![entry isKindOfClass:[NSString class]]) continue;
+        NSString *root = [(NSString *)entry stringByStandardizingPath];
+        // Defaults must contain absolute paths — a relative or malformed
+        // entry would resolve in the plugin's cwd, which is nonsense.
+        if (root.length == 0 || ![root isAbsolutePath]) continue;
+        // Filter out projects whose .beads/ no longer exists. Cheap stat.
+        NSString *beadsDir = [root stringByAppendingPathComponent:@".beads"];
+        BOOL isDir = NO;
+        if ([fm fileExistsAtPath:beadsDir isDirectory:&isDir] && isDir) {
+            [out addObject:root];
+        }
+    }
+    return out;
+}
+
++ (void)_recordRecentProjectRoot:(NSString *)root {
+    if (root.length == 0) return;
+    NSString *std = [root stringByStandardizingPath];
+    if (!std) return;
+    NSMutableArray<NSString *> *list =
+        [[[NSUserDefaults standardUserDefaults] arrayForKey:kBeadsRecentProjectsKey] mutableCopy];
+    if (!list) list = [NSMutableArray array];
+    // Remove any prior occurrences (dedupe) regardless of position.
+    NSMutableIndexSet *kill = [NSMutableIndexSet indexSet];
+    [list enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL *stop) {
+        if ([obj isKindOfClass:[NSString class]] &&
+            [[(NSString *)obj stringByStandardizingPath] isEqualToString:std]) {
+            [kill addIndex:idx];
+        }
+    }];
+    [list removeObjectsAtIndexes:kill];
+    [list insertObject:std atIndex:0];
+    while (list.count > kBeadsRecentProjectsCap) {
+        [list removeLastObject];
+    }
+    [[NSUserDefaults standardUserDefaults] setObject:list
+                                              forKey:kBeadsRecentProjectsKey];
+}
+
+// Dropdown trigger — dynamically builds the menu every time so recency
+// and file-path activation state reflect the moment of the click.
+- (void)_didTapProjectChip:(id)sender {
+    NSMenu *m = [self _buildProjectSwitcherMenu];
+    if (m.itemArray.count == 0) { NSBeep(); return; }
+    NSButton *btn = (NSButton *)sender;
+    NSPoint pt = NSMakePoint(0, btn.bounds.size.height + 2);
+    [m popUpMenuPositioningItem:nil
+                     atLocation:[btn convertPoint:pt toView:nil]
+                         inView:btn.window.contentView];
+}
+
+- (NSMenu *)_buildProjectSwitcherMenu {
+    NSMenu *m = [[NSMenu alloc] initWithTitle:@"Switch Project"];
+    m.autoenablesItems = NO;
+
+    NSString *currentStd = [self.project.projectRoot stringByStandardizingPath];
+
+    // Current project (checked, non-actionable label row). Hidden when
+    // no project is bound — no value in showing "(no project) ✓".
+    if (self.project) {
+        NSString *leaf = self.project.projectRoot.lastPathComponent ?: @"(project)";
+        NSMenuItem *cur = [[NSMenuItem alloc] initWithTitle:leaf
+                                                     action:nil
+                                              keyEquivalent:@""];
+        cur.toolTip = self.project.projectRoot;
+        cur.state   = NSControlStateValueOn;
+        cur.enabled = NO;
+        [m addItem:cur];
+        [m addItem:[NSMenuItem separatorItem]];
+    }
+
+    // Collect candidate project roots from three sources, MRU-ordered:
+    //   1. NSUserDefaults (cross-session recent binds)
+    //   2. Session-seen file paths, walked up for .beads/
+    //   3. NSDocumentController's recent documents (system-wide)
+    // Dedupe by standardized projectRoot.
+    NSMutableOrderedSet<NSString *> *rootsMRU = [NSMutableOrderedSet orderedSet];
+    for (NSString *r in [BeadsPanel _persistedRecentProjectRoots]) {
+        [rootsMRU addObject:r];
+    }
+
+    NSMutableArray<NSString *> *walkInputs = [NSMutableArray array];
+    [walkInputs addObjectsFromArray:_seenFilePaths.allObjects];
+    for (NSURL *u in [[NSDocumentController sharedDocumentController] recentDocumentURLs]) {
+        NSString *p = u.path;
+        if (p.length) [walkInputs addObject:p];
+    }
+    // Cap scanning work: 64 inputs = ~640 stat calls worst-case at our
+    // depth limit of 10 (most walks terminate far earlier at $HOME).
+    if (walkInputs.count > 64) {
+        walkInputs = [[walkInputs subarrayWithRange:NSMakeRange(0, 64)] mutableCopy];
+    }
+    NSArray<BeadsProject *> *discovered =
+        [BeadsProjectScanner discoverUniqueProjectsFromPaths:walkInputs max:32];
+    for (BeadsProject *p in discovered) {
+        NSString *std = [p.projectRoot stringByStandardizingPath];
+        if (std) [rootsMRU addObject:std];
+    }
+
+    // Render — skip the currently-bound one (already shown above).
+    BOOL anyListed = NO;
+    for (NSString *root in rootsMRU) {
+        if (currentStd && [root isEqualToString:currentStd]) continue;
+        NSString *leaf = root.lastPathComponent ?: root;
+        NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:leaf
+                                                    action:@selector(_didPickRecentProject:)
+                                             keyEquivalent:@""];
+        it.target = self;
+        it.toolTip = root;
+        it.representedObject = root;
+        [m addItem:it];
+        anyListed = YES;
+    }
+    if (anyListed) [m addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *open = [[NSMenuItem alloc] initWithTitle:@"Open .beads folder…"
+                                                  action:@selector(_didPickOpenBeadsDir:)
+                                           keyEquivalent:@""];
+    open.target = self;
+    [m addItem:open];
+
+    if (self.project) {
+        NSMenuItem *clear = [[NSMenuItem alloc] initWithTitle:@"Unbind current project"
+                                                       action:@selector(_didPickUnbind:)
+                                                keyEquivalent:@""];
+        clear.target = self;
+        [m addItem:clear];
+    }
+
+    return m;
+}
+
+- (void)_didPickRecentProject:(NSMenuItem *)sender {
+    NSString *root = [sender.representedObject isKindOfClass:[NSString class]]
+                     ? sender.representedObject : nil;
+    if (root.length == 0) return;
+    BeadsProject *p = [BeadsProjectScanner projectFromRoot:root];
+    if (!p) {
+        // .beads disappeared since we built the menu — surface a friendly
+        // error + prune the stale defaults entry so it stops appearing.
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = @"Project not found";
+        a.informativeText = [NSString stringWithFormat:
+            @"The .beads/ directory for this project no longer exists:\n\n%@", root];
+        [a addButtonWithTitle:@"OK"];
+        [a runModal];
+        // Prune from defaults — easiest is to re-record a sentinel then
+        // strip: simpler, just rewrite the list without this entry.
+        NSMutableArray *list = [[[NSUserDefaults standardUserDefaults]
+            arrayForKey:kBeadsRecentProjectsKey] mutableCopy] ?: [NSMutableArray array];
+        [list removeObject:root];
+        [[NSUserDefaults standardUserDefaults] setObject:list
+                                                  forKey:kBeadsRecentProjectsKey];
+        return;
+    }
+    [self bindProject:p];
+}
+
+- (void)_didPickOpenBeadsDir:(NSMenuItem *)sender {
+    NSOpenPanel *op = [NSOpenPanel openPanel];
+    op.canChooseFiles          = NO;
+    op.canChooseDirectories    = YES;
+    op.canCreateDirectories    = NO;
+    op.allowsMultipleSelection = NO;
+    op.resolvesAliases         = YES;
+    op.treatsFilePackagesAsDirectories = YES;   // .beads may have xattrs
+    op.title   = @"Open .beads folder";
+    op.message = @"Pick the .beads directory of the project you want to view.";
+    op.prompt  = @"Open";
+    // Default to the current project's parent so the user doesn't start
+    // from scratch; fall back to $HOME.
+    NSString *start = self.project.projectRoot ?: NSHomeDirectory();
+    op.directoryURL = [NSURL fileURLWithPath:start isDirectory:YES];
+
+    __weak typeof(self) weakSelf = self;
+    [op beginSheetModalForWindow:self.window
+              completionHandler:^(NSModalResponse result) {
+        __strong typeof(self) s = weakSelf;
+        if (!s || result != NSModalResponseOK) return;
+        NSString *chosen = op.URL.path;
+        if (chosen.length == 0) return;
+        // Accept both the .beads/ itself or its parent (project root);
+        // canonicalize to .beads/ and validate.
+        NSString *beadsDir = chosen;
+        if (![beadsDir.lastPathComponent isEqualToString:@".beads"]) {
+            beadsDir = [chosen stringByAppendingPathComponent:@".beads"];
+        }
+        BeadsProject *p = [BeadsProjectScanner projectFromBeadsDir:beadsDir];
+        if (!p) {
+            NSAlert *a = [[NSAlert alloc] init];
+            a.messageText = @"Not a beads project";
+            a.informativeText =
+                @"The chosen directory doesn't contain a usable .beads/ "
+                 "folder (expected issues.jsonl or beads.db inside).";
+            [a addButtonWithTitle:@"OK"];
+            [a runModal];
+            return;
+        }
+        [s bindProject:p];
+    }];
+}
+
+- (void)_didPickUnbind:(NSMenuItem *)sender {
+    if (!self.project) return;
+    [self bindProject:nil];
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 //  Status/title updates
 // ─────────────────────────────────────────────────────────────────────────
 - (void)_refreshTitleBar {
     if (self.project) {
-        _titleLabel.stringValue = self.project.projectRoot.lastPathComponent ?: @"(project)";
-        _titleLabel.toolTip    = self.project.projectRoot;
+        _projectChip.title    = self.project.projectRoot.lastPathComponent ?: @"(project)";
+        _projectChip.toolTip  = self.project.projectRoot;
         _refreshButton.enabled = YES;
         _openDirButton.enabled = YES;
         _viewModePopup.enabled = YES;
         _searchField.enabled   = YES;
     } else {
-        _titleLabel.stringValue = @"(no project)";
-        _titleLabel.toolTip    = @"Open a file inside a repo containing a .beads/ directory.";
+        _projectChip.title    = @"(no project)";
+        _projectChip.toolTip  = @"Click to pick a .beads/ project.";
         _refreshButton.enabled = NO;
         _openDirButton.enabled = NO;
         _viewModePopup.enabled = NO;
         _searchField.enabled   = NO;
     }
+    // Chip is ALWAYS enabled — that's the entry point to Open/Scan even
+    // when no project is currently bound.
+    _projectChip.enabled = YES;
     [_viewModePopup selectItemWithTag:_viewMode];
 
     // Search field: Board + Issues (where per-issue filtering applies).
@@ -889,7 +1158,7 @@ static NSString *jsStringLiteral(NSString *input) {
 
 - (void)_refreshStatusBar {
     if (!self.project) {
-        _statusLabel.stringValue = @"no project · open a file inside a repo containing .beads/";
+        _statusLabel.stringValue = @"no project · click the project name ▾ to pick one";
         return;
     }
     if (!self.project.jsonlPath) {
