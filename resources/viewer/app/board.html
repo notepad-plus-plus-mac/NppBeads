@@ -60,6 +60,15 @@
             <input type="text" name="labels" autocomplete="off" placeholder="backend, api">
           </label>
           <label class="field">
+            <span class="field-label">Blocked by <span class="hint">(existing bead IDs)</span></span>
+            <div class="chip-input">
+              <div class="chip-list" data-role="chips"></div>
+              <input type="text" name="blockerInput" list="blocker-suggest"
+                     autocomplete="off" placeholder="type bd-… and press Enter">
+              <datalist id="blocker-suggest"></datalist>
+            </div>
+          </label>
+          <label class="field">
             <span class="field-label">Description <span class="hint">(Markdown)</span></span>
             <textarea name="description" rows="5"
                       placeholder="Context, acceptance criteria, etc."></textarea>

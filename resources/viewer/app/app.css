@@ -108,7 +108,58 @@ body { display: flex; flex-direction: column; }
   color: #fff;
   border-color: var(--accent, #2563eb);
 }
-.new-issue-modal { width: min(520px, 92vw); }
+.new-issue-modal { width: min(560px, 92vw); }
+.chip-input {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 4px 6px;
+  min-height: 32px;
+}
+.chip-input:focus-within {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+.chip-input .chip-list {
+  display: contents;
+}
+.chip-input .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 6px 1px 8px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.chip-input .chip-rm {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.chip-input .chip-rm:hover { color: #dc2626; }
+.chip-input input {
+  border: 0 !important;
+  outline: none !important;
+  padding: 3px 2px !important;
+  background: transparent !important;
+  flex: 1;
+  min-width: 120px;
+}
+.chip-input input:focus { outline: none !important; }
 .modal-edit { width: min(640px, 94vw); max-height: 88vh; }
 .modal-edit .modal-body { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
 .modal-edit .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }

@@ -778,6 +778,67 @@
     const statusEl = overlay.querySelector('.form-status');
     const titleEl  = overlay.querySelector('input[name="title"]');
 
+    // Blocker chip-input: populate suggestion list + track chosen ids.
+    const chipList   = overlay.querySelector('[data-role="chips"]');
+    const blockerIn  = overlay.querySelector('input[name="blockerInput"]');
+    const blockerDL  = overlay.querySelector('#blocker-suggest');
+    const selected   = new Set();
+
+    function refreshDatalist() {
+      blockerDL.innerHTML = '';
+      // datalist options: value=id, label=title. Browsers show both.
+      // Cap at 500 — more than that and Safari grinds on every keystroke.
+      const cap = Math.min(App.beads.length, 500);
+      for (let i = 0; i < cap; i++) {
+        const bd = App.beads[i];
+        const opt = document.createElement('option');
+        opt.value = bd.id;
+        opt.label = bd.title || '';
+        blockerDL.appendChild(opt);
+      }
+    }
+    function addChip(id) {
+      id = String(id || '').trim();
+      if (!id || selected.has(id)) return;
+      selected.add(id);
+      const bead = App.beads.find(b => b.id === id);
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.dataset.id = id;
+      chip.title = bead ? bead.title : id;
+      chip.textContent = id;
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'chip-rm';
+      rm.textContent = '×';
+      rm.setAttribute('aria-label', 'Remove ' + id);
+      rm.addEventListener('click', () => {
+        selected.delete(id);
+        chip.remove();
+      });
+      chip.appendChild(rm);
+      chipList.appendChild(chip);
+    }
+    blockerIn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',' || e.key === 'Tab') {
+        const v = blockerIn.value.trim().replace(/,$/, '');
+        if (v) { e.preventDefault(); addChip(v); blockerIn.value = ''; }
+      } else if (e.key === 'Backspace' && !blockerIn.value) {
+        // Backspace on empty input removes the last chip — feels natural.
+        const chips = chipList.querySelectorAll('.chip');
+        if (chips.length) {
+          const last = chips[chips.length - 1];
+          selected.delete(last.dataset.id);
+          last.remove();
+        }
+      }
+    });
+    blockerIn.addEventListener('change', () => {
+      const v = blockerIn.value.trim();
+      if (v) { addChip(v); blockerIn.value = ''; }
+    });
+    refreshDatalist();
+
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) closeNewIssueModal();
     });
@@ -814,20 +875,53 @@
         submit.disabled = false;
         return;
       }
-      window.__nppBridge.call('createBead', payload).then((resp) => {
-        if (resp.ok) {
-          const newId = resp.bead && resp.bead.id;
-          showToast(newId ? (newId + ' created') : 'issue created');
-          closeNewIssueModal();
-          // Optimistic: show the new bead immediately under its intended
-          // status column. Real data arrives via the broadcast, which
-          // clears the optimistic override automatically.
-          if (newId) optimistic.set(newId, 'open');
-        } else {
+      const blockerIds = [...selected];
+      window.__nppBridge.call('createBead', payload).then(async (resp) => {
+        if (!resp.ok) {
           statusEl.textContent = resp.error || 'create failed';
           statusEl.classList.add('is-error');
           submit.disabled = false;
+          return;
         }
+        const newId = resp.bead && resp.bead.id;
+        if (!newId) {
+          showToast('issue created');
+          closeNewIssueModal();
+          return;
+        }
+        // Wire up each "blocked by" dep sequentially. We don't parallel-
+        // fire because bd's sqlite/dolt backend can deadlock on
+        // concurrent writes within the same project; sequential is
+        // reliable even if a bit slower.
+        if (blockerIds.length) {
+          statusEl.textContent = 'linking ' + blockerIds.length + ' dep' +
+                                 (blockerIds.length > 1 ? 's' : '') + '…';
+          const failed = [];
+          for (const bid of blockerIds) {
+            try {
+              const r = await window.__nppBridge.call('depAdd', {
+                // newId depends on bid — bid blocks newId.
+                dependent:  newId,
+                dependency: bid,
+                depType:    'blocks',
+              });
+              if (!r.ok) failed.push(bid + ' (' + (r.error || 'failed') + ')');
+            } catch (e) {
+              failed.push(bid + ' (' + ((e && e.message) || e) + ')');
+            }
+          }
+          if (failed.length) {
+            showToast(newId + ' created but some deps failed: ' +
+                      failed.join('; '));
+          } else {
+            showToast(newId + ' created with ' + blockerIds.length + ' dep' +
+                      (blockerIds.length > 1 ? 's' : ''));
+          }
+        } else {
+          showToast(newId + ' created');
+        }
+        optimistic.set(newId, 'open');  // show under Open immediately
+        closeNewIssueModal();
       }).catch((err) => {
         statusEl.textContent = (err && err.message) || String(err);
         statusEl.classList.add('is-error');
