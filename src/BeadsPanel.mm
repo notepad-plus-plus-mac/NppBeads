@@ -86,6 +86,7 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
 
     BOOL                _viewerLoaded;   // DOM ready
     BOOL                _pendingReload;  // a reload was requested before DOM ready
+    NSString           *_pendingPostLoadJS;  // fire-once JS to run after didFinishNavigation
     NSString           *_lastLoadError;  // human-readable load failure (for diagnostics)
     NSUInteger          _loadCount;      // # of _loadViewer calls (reload-loop diag)
     NSUInteger          _reloadDataCount;
@@ -941,6 +942,63 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
     [_seenFilePaths addObject:std];
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+//  Phase 5 — programmatic modal entry points (driven from editor menu)
+// ─────────────────────────────────────────────────────────────────────────
+
+- (void)showBeadDetail:(NSString *)beadId {
+    if (beadId.length == 0) { NSBeep(); return; }
+    NSString *bidEsc = [beadId stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    bidEsc = [bidEsc stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    NSString *js = [NSString stringWithFormat:
+        @"if (window.__nppApp && typeof window.__nppApp.openBeadModalById === 'function') {"
+         "  window.__nppApp.openBeadModalById('%@');"
+         "} else {"
+         "  window.__nppBeadsPendingModalId = '%@';"
+         "}",
+        bidEsc, bidEsc];
+    [self _runOnBoardView:js];
+}
+
+- (void)showCreateIssueWithTitle:(NSString *)title {
+    NSString *safeTitle = title ?: @"";
+    NSString *titleEsc = [safeTitle stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    titleEsc = [titleEsc stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    // Strip newlines (selection may carry them; title must be one line).
+    titleEsc = [titleEsc stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+    titleEsc = [titleEsc stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
+    NSString *js = [NSString stringWithFormat:
+        @"if (window.__nppApp && typeof window.__nppApp.openNewIssueWithTitle === 'function') {"
+         "  window.__nppApp.openNewIssueWithTitle('%@');"
+         "} else {"
+         "  window.__nppBeadsPendingCreateTitle = '%@';"
+         "}",
+        titleEsc, titleEsc];
+    [self _runOnBoardView:js];
+}
+
+// Route a bit of JS at the Board view. If the view is already loaded on
+// board.html, fire immediately. Otherwise switch to Board and queue the
+// JS to fire in didFinishNavigation.
+- (void)_runOnBoardView:(NSString *)js {
+    if (_viewMode == BeadsViewModeBoard && _viewerLoaded && _webView) {
+        [_webView evaluateJavaScript:js completionHandler:nil];
+        return;
+    }
+    _pendingPostLoadJS = [js copy];
+    if (_viewMode != BeadsViewModeBoard) {
+        _viewMode = BeadsViewModeBoard;
+        [_viewModePopup selectItemWithTag:_viewMode];
+        _viewerLoaded = NO;
+        [self _installJsonlUserScript];
+        NSURL *url = [self _urlForViewMode:_viewMode];
+        [_webView loadRequest:[NSURLRequest requestWithURL:url]];
+        [self _refreshTitleBar];
+    }
+    // If we're on Board but not loaded yet (very early race), just wait —
+    // didFinishNavigation will flush pendingPostLoadJS.
+}
+
 // MRU helpers — persist last-N bound project roots to NSUserDefaults.
 
 + (NSArray<NSString *> *)_persistedRecentProjectRoots {
@@ -1719,6 +1777,22 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
     // Re-apply theme + current search filter for this freshly-loaded page.
     [self _pushThemeToWebView];
     if (_lastSearchQuery.length) [self _pushSearchQuery:_lastSearchQuery];
+    // Phase 5 — fire-once post-load JS (showBeadDetail: / showCreateIssue:
+    // stashes this while waiting for a view switch to finish loading).
+    // Only drain when the just-loaded page is Board — board.js defines
+    // window.__nppApp. Running the JS on dashboard.html would stash a
+    // pending global on a window that's about to be replaced when the
+    // board.html load fires next.
+    if (_pendingPostLoadJS.length) {
+        NSString *path = webView.URL.path ?: @"";
+        if ([path hasSuffix:@"/app/board.html"]) {
+            NSString *js = _pendingPostLoadJS;
+            _pendingPostLoadJS = nil;
+            [_webView evaluateJavaScript:js completionHandler:^(id r, NSError *e) {
+                if (e) NSLog(@"[NppBeads] pending post-load JS error: %@", e);
+            }];
+        }
+    }
 }
 
 - (void)webView:(WKWebView *)webView

@@ -87,6 +87,16 @@ typedef NS_ENUM(NSInteger, BeadsThemePref) {
 // projects without needing a filesystem tree scan. No-op on nil/empty.
 - (void)noteFileActivated:(nullable NSString *)filePath;
 
+// Phase 5: programmatically open the Board view's detail modal on a
+// specific bead id. Switches the view popup to Board, waits for the
+// viewer load if needed, then evaluates window.__nppApp.openBeadModalById.
+- (void)showBeadDetail:(NSString *)beadId;
+
+// Phase 5: open the Board view's "New issue" modal with an optional
+// prefilled title string (from the editor selection). Same view-switch
+// + post-load handshake as showBeadDetail:.
+- (void)showCreateIssueWithTitle:(nullable NSString *)title;
+
 @end
 
 NS_ASSUME_NONNULL_END

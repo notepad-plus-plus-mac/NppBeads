@@ -25,6 +25,7 @@ add_library(NppBeads SHARED
     src/BdCommandRunner.mm
     src/BdDataSource.mm
     src/BeadsPoll.mm
+    src/BeadIdIndicator.mm
 )
 target_include_directories(NppBeads PRIVATE
     ${NPP_PLUGIN_INCLUDE}

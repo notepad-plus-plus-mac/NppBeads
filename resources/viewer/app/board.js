@@ -1357,6 +1357,54 @@
     }
     _runRefresh();
   };
+
+  // ── Phase 5 — programmatic entry points from the native editor hooks ──
+  // NppBeads.mm fires these after the user triggers
+  //   Plugins → NppBeads → Jump to bead under caret (⌘⌥⇧J)
+  //   Plugins → NppBeads → Create issue from selection (⌘⌥⇧N)
+  // Either the panel was already on Board (JS runs immediately) or the
+  // view was switched and this runs inside didFinishNavigation's
+  // pending-JS hook. On first-open the JS may beat __nppApp — native
+  // stashes `window.__nppBeadsPendingModalId` / `.pendingCreateTitle`
+  // and we drain those here.
+
+  App.openBeadModalById = function (id) {
+    if (typeof id !== 'string' || !id) return;
+    openBeadModal(id);
+  };
+
+  App.openNewIssueWithTitle = function (title) {
+    openNewIssueModal();
+    // Prefill on next tick — openNewIssueModal appends the template,
+    // the title input is queryable immediately but we defer to be safe
+    // with any Alpine/transition timing (there's no Alpine here but
+    // this matches the pattern used for autofocus).
+    setTimeout(function () {
+      const overlay = document.getElementById('new-issue-overlay');
+      if (!overlay) return;
+      const input = overlay.querySelector('input[name="title"]');
+      if (input && typeof title === 'string' && title.length) {
+        input.value = title;
+        // Move caret to end for easy editing
+        input.setSelectionRange(title.length, title.length);
+        input.focus();
+      }
+    }, 0);
+  };
+
+  // Drain any pending directives that native set before we loaded.
+  (function drainPending() {
+    if (typeof window.__nppBeadsPendingModalId === 'string') {
+      const id = window.__nppBeadsPendingModalId;
+      delete window.__nppBeadsPendingModalId;
+      App.openBeadModalById(id);
+    }
+    if (typeof window.__nppBeadsPendingCreateTitle === 'string') {
+      const title = window.__nppBeadsPendingCreateTitle;
+      delete window.__nppBeadsPendingCreateTitle;
+      App.openNewIssueWithTitle(title);
+    }
+  })();
   App.applyFilter  = render;
 
   // Initial render if data already present (app.js fires DOMContentLoaded

@@ -17,6 +17,7 @@
 
 #import "BeadsPanel.h"
 #import "BeadsProjectScanner.h"
+#import "BeadIdIndicator.h"
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Plugin identity + menu slots
@@ -24,12 +25,16 @@
 static const char *PLUGIN_NAME = "NppBeads";
 
 enum CmdIdx {
-    kCmdShowPanel = 0,
-    kCmdReload    = 1,
-    kCmdOpenDir   = 2,
-    kCmdSep       = 3,
-    kCmdAbout     = 4,
-    kCmdCount     = 5,
+    kCmdShowPanel        = 0,
+    kCmdReload           = 1,
+    kCmdOpenDir          = 2,
+    kCmdSep1             = 3,
+    kCmdJumpToBead       = 4,   // Phase 5
+    kCmdCopyBeadId       = 5,   // Phase 5
+    kCmdCreateFromSel    = 6,   // Phase 5
+    kCmdSep2             = 7,
+    kCmdAbout            = 8,
+    kCmdCount            = 9,
 };
 
 static FuncItem   sFuncItem[kCmdCount];
@@ -44,6 +49,7 @@ static NSPanel    *g_floatingPanel = nil;
 static bool        sPanelVisible   = false;
 static std::string sResourcesDir;
 static BeadsProject *sCurrentProject = nil;
+static BeadIdIndicator *sIndicator = nil;   // Phase 5 editor bead-id painter
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Forward decls
@@ -52,10 +58,16 @@ static void cmdTogglePanel();
 static void cmdReload();
 static void cmdOpenDir();
 static void cmdAbout();
+static void cmdJumpToBead();
+static void cmdCopyBeadId();
+static void cmdCreateFromSelection();
 static void ensurePanel();
 static NSPanel *ensureFloatingPanel();
 static BOOL panelIsShown();
 static void rescanProjectFromCurrentBuffer();
+static uintptr_t currentScintillaHandle();
+static NSString * _Nullable beadIdAtCurrentCaret();
+static NSString * _Nullable currentSelectionText();
 
 static inline intptr_t npp(uint32_t msg, uintptr_t w = 0, intptr_t l = 0) {
     return sNpp._sendMessage(sNpp._nppHandle, msg, w, l);
@@ -246,6 +258,130 @@ static void cmdOpenDir() {
     [sPanel openBeadsDirInFinder:nil];
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+//  Phase 5 — editor integration helpers
+// ─────────────────────────────────────────────────────────────────────────
+
+// Resolve the scintilla handle that corresponds to the currently-focused
+// editor view. NPPM_GETCURRENTSCINTILLA returns 0 (main) or 1 (sub).
+static uintptr_t currentScintillaHandle() {
+    int viewId = 0;
+    (void)sNpp._sendMessage(sNpp._nppHandle, NPPM_GETCURRENTSCINTILLA, 0,
+                            (intptr_t)&viewId);
+    if (viewId == 0) return sNpp._scintillaMainHandle;
+    if (viewId == 1) return sNpp._scintillaSecondHandle;
+    return sNpp._scintillaMainHandle;
+}
+
+// Query the indicator cache for a bead id at the current caret position.
+// Falls back to scanning an immediate ±64-byte window around the caret
+// if the cache is stale or empty (e.g. first activation, or user clicked
+// an area outside the scanned window and the debounce hasn't fired yet).
+static NSString * _Nullable beadIdAtCurrentCaret() {
+    if (!sIndicator) return nil;
+    uintptr_t h = currentScintillaHandle();
+    if (h == 0) return nil;
+    intptr_t caret = sNpp._sendMessage(h, SCI_GETCURRENTPOS, 0, 0);
+    NSString *id_ = [sIndicator beadIdAtPosition:caret];
+    if (id_.length) return id_;
+
+    // Fallback — scan a tiny window around the caret directly. Bead ids
+    // are at most ~20 chars so ±64 bytes is plenty.
+    intptr_t start = MAX((intptr_t)0, caret - 64);
+    intptr_t end   = MIN(sNpp._sendMessage(h, SCI_GETLENGTH, 0, 0),
+                         caret + 64);
+    if (end <= start) return nil;
+    NSMutableData *buf = [NSMutableData dataWithLength:(NSUInteger)(end - start)];
+    char *out = (char *)buf.mutableBytes;
+    for (intptr_t i = 0; i < end - start; i++) {
+        out[i] = (char)sNpp._sendMessage(h, SCI_GETCHARAT,
+                                          (uintptr_t)(start + i), 0);
+    }
+    NSString *window = [[NSString alloc] initWithData:buf encoding:NSUTF8StringEncoding];
+    if (!window.length) return nil;
+
+    NSString *prefix = sIndicator.prefix ?: @"bd-";
+    // Build the same regex the indicator uses, restricted to this window.
+    NSString *pattern = [NSString stringWithFormat:@"\\b%@[a-z0-9]+(\\.\\d+)*\\b",
+                         [NSRegularExpression escapedPatternForString:prefix]];
+    NSRegularExpression *rx = [NSRegularExpression
+        regularExpressionWithPattern:pattern options:0 error:nil];
+    if (!rx) return nil;
+
+    // caret in byte-space maps to a UTF-16 offset in `window` — conversion
+    // is identity for ASCII, but we're conservative and convert by
+    // re-encoding the slice up to the caret.
+    intptr_t caretOffset = caret - start;
+    intptr_t caretByteOffset = caretOffset;  // within the window
+    NSData *lead = [buf subdataWithRange:NSMakeRange(0, (NSUInteger)caretByteOffset)];
+    NSString *leadStr = [[NSString alloc] initWithData:lead encoding:NSUTF8StringEncoding];
+    NSUInteger caretChar = leadStr.length;
+
+    __block NSString *best = nil;
+    [rx enumerateMatchesInString:window options:0
+                           range:NSMakeRange(0, window.length)
+                      usingBlock:^(NSTextCheckingResult *m, NSMatchingFlags f, BOOL *stop) {
+        if (!m) return;
+        NSRange r = m.range;
+        if (caretChar >= r.location && caretChar <= r.location + r.length) {
+            best = [window substringWithRange:r];
+            *stop = YES;
+        }
+    }];
+    return best;
+}
+
+// UTF-8 text of the current editor selection (or empty when none). Caps
+// at 4 KB so we don't round-trip a whole file via the bridge.
+static NSString * _Nullable currentSelectionText() {
+    uintptr_t h = currentScintillaHandle();
+    if (h == 0) return nil;
+    intptr_t selStart = sNpp._sendMessage(h, SCI_GETSELECTIONSTART, 0, 0);
+    intptr_t selEnd   = sNpp._sendMessage(h, SCI_GETSELECTIONEND, 0, 0);
+    if (selEnd <= selStart) return nil;
+    intptr_t len = selEnd - selStart;
+    if (len > 4096) len = 4096;
+    NSMutableData *buf = [NSMutableData dataWithLength:(NSUInteger)len];
+    char *out = (char *)buf.mutableBytes;
+    for (intptr_t i = 0; i < len; i++) {
+        out[i] = (char)sNpp._sendMessage(h, SCI_GETCHARAT,
+                                          (uintptr_t)(selStart + i), 0);
+    }
+    NSString *s = [[NSString alloc] initWithData:buf encoding:NSUTF8StringEncoding];
+    // Normalize: trim + collapse internal whitespace to single spaces so
+    // a multi-line selection becomes a one-line title candidate.
+    s = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!s.length) return nil;
+    NSRegularExpression *wsRx = [NSRegularExpression
+        regularExpressionWithPattern:@"\\s+" options:0 error:nil];
+    s = [wsRx stringByReplacingMatchesInString:s options:0
+                                          range:NSMakeRange(0, s.length)
+                                   withTemplate:@" "];
+    return s;
+}
+
+static void cmdJumpToBead() {
+    NSString *bid = beadIdAtCurrentCaret();
+    if (!bid.length) { NSBeep(); return; }
+    ensurePanel();
+    if (!sPanelVisible) cmdTogglePanel();
+    [sPanel showBeadDetail:bid];
+}
+
+static void cmdCopyBeadId() {
+    NSString *bid = beadIdAtCurrentCaret();
+    if (!bid.length) { NSBeep(); return; }
+    [[NSPasteboard generalPasteboard] clearContents];
+    [[NSPasteboard generalPasteboard] setString:bid forType:NSPasteboardTypeString];
+}
+
+static void cmdCreateFromSelection() {
+    NSString *sel = currentSelectionText();
+    ensurePanel();
+    if (!sPanelVisible) cmdTogglePanel();
+    [sPanel showCreateIssueWithTitle:sel];
+}
+
 static void cmdAbout() {
     @autoreleasepool {
         NSAlert *a = [[NSAlert alloc] init];
@@ -276,6 +412,12 @@ extern "C" NPP_EXPORT void setInfo(NppData data) {
     sNpp = data;
     sResourcesDir = resolveResourcesDir();
 
+    // Phase 5 — one indicator instance is enough. It switches its active
+    // scintilla handle per NPPN_BUFFERACTIVATED, so two-view setups work
+    // with a single painter.
+    sIndicator = [[BeadIdIndicator alloc]
+                   initWithSendMessage:(BeadIdSendMessageFn)sNpp._sendMessage];
+
     memset(sFuncItem, 0, sizeof(sFuncItem));
     auto setItem = [&](int idx, const char *name, PFUNCPLUGINCMD fn) {
         strlcpy(sFuncItem[idx]._itemName, name, NPP_MENU_ITEM_SIZE);
@@ -283,18 +425,29 @@ extern "C" NPP_EXPORT void setInfo(NppData data) {
         sFuncItem[idx]._init2Check = false;
         sFuncItem[idx]._pShKey     = nullptr;
     };
-    setItem(kCmdShowPanel, "Show Beads panel", cmdTogglePanel);
-    setItem(kCmdReload,    "Reload issues",    cmdReload);
-    setItem(kCmdOpenDir,   "Reveal .beads/ in Finder", cmdOpenDir);
-    sFuncItem[kCmdSep]._itemName[0] = '\0';
-    sFuncItem[kCmdSep]._pFunc       = nullptr;
-    setItem(kCmdAbout,     "About NppBeads",    cmdAbout);
+    setItem(kCmdShowPanel,     "Show Beads panel", cmdTogglePanel);
+    setItem(kCmdReload,        "Reload issues",    cmdReload);
+    setItem(kCmdOpenDir,       "Reveal .beads/ in Finder", cmdOpenDir);
+    sFuncItem[kCmdSep1]._itemName[0] = '\0';
+    sFuncItem[kCmdSep1]._pFunc       = nullptr;
+    setItem(kCmdJumpToBead,    "Jump to bead under caret",    cmdJumpToBead);
+    setItem(kCmdCopyBeadId,    "Copy bead id under caret",    cmdCopyBeadId);
+    setItem(kCmdCreateFromSel, "Create issue from selection", cmdCreateFromSelection);
+    sFuncItem[kCmdSep2]._itemName[0] = '\0';
+    sFuncItem[kCmdSep2]._pFunc       = nullptr;
+    setItem(kCmdAbout,         "About NppBeads",    cmdAbout);
 
-    static ShortcutKey scShow, scReload;
+    static ShortcutKey scShow, scReload, scJump, scCreate;
     installShortcut(&scShow,   'B');
     installShortcut(&scReload, 'R');
-    sFuncItem[kCmdShowPanel]._pShKey = &scShow;
-    sFuncItem[kCmdReload]._pShKey    = &scReload;
+    installShortcut(&scJump,   'J');    // ⌘⌥⇧J — jump to bead under caret
+    installShortcut(&scCreate, 'N');    // ⌘⌥⇧N — new issue from selection
+    sFuncItem[kCmdShowPanel]._pShKey     = &scShow;
+    sFuncItem[kCmdReload]._pShKey        = &scReload;
+    sFuncItem[kCmdJumpToBead]._pShKey    = &scJump;
+    sFuncItem[kCmdCreateFromSel]._pShKey = &scCreate;
+    // Copy-bead-id intentionally has no shortcut — not worth burning one,
+    // and ⌘C in the editor is always just copy-selection.
 }
 
 extern "C" NPP_EXPORT const char *getName() { return PLUGIN_NAME; }
@@ -324,8 +477,32 @@ extern "C" NPP_EXPORT void beNotified(SCNotification *n) {
             // empty seen-paths set.
             notePathActivated();
             if (sPanelVisible) rescanProjectFromCurrentBuffer();
+            // Phase 5 — retarget the indicator at the now-active editor
+            // and repaint. Also fires when the user splits a view.
+            if (sIndicator) {
+                sIndicator.scintillaHandle = currentScintillaHandle();
+                [sIndicator rescanNow];
+            }
+            break;
+        // Phase 5 — forwarded Scintilla notifications. BeadIdIndicator
+        // debounces internally (150 ms coalesce), so we don't filter
+        // further beyond cheap guards.
+        //   SCN_MODIFIED  — insert/delete/undo/redo (host filter)
+        //   SCN_UPDATEUI  — caret move, style change; fires on typing
+        //   SCN_PAINTED   — catches mouse-wheel scrolls that don't fire
+        //                    UPDATEUI
+        case SCN_MODIFIED:
+        case SCN_UPDATEUI:
+        case SCN_PAINTED:
+            if (sIndicator && sIndicator.scintillaHandle != 0) {
+                [sIndicator scheduleRescan];
+            }
             break;
         case NPPN_SHUTDOWN:
+            if (sIndicator) {
+                [sIndicator clearAll];
+                sIndicator = nil;
+            }
             if (g_panelHandle > 0) {
                 sNpp._sendMessage(sNpp._nppHandle,
                                   NPPM_DMM_UNREGISTERPANEL,
