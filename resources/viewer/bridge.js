@@ -597,6 +597,40 @@
 
   NPP.log('bridge.js active — mode=' + NPP.mode);
 
+  // ── ⌘+ / ⌘- / ⌘0 zoom shortcuts ─────────────────────────────────────
+  // Captures the standard browser zoom keystrokes and routes them to
+  // the native side (BeadsPanel._adjustPageZoomBy: / _setPageZoom:).
+  // WKWebView's pageZoom is the actual zoom — we just relay intent.
+  //
+  // Uses `capture` + preventDefault so the webview's own handlers don't
+  // react first. Skipped when the user is typing in an editable field
+  // (otherwise ⌘- / ⌘= inside a textarea would be stolen).
+  window.addEventListener('keydown', function (e) {
+    if (!e.metaKey) return;
+    const target = e.target;
+    const tag = target && target.tagName;
+    const editable = (target && target.isContentEditable) ||
+                     tag === 'INPUT' || tag === 'TEXTAREA';
+    if (editable) return;
+
+    let kind = null;
+    // `=` is the unshifted key on a US keyboard where Shift+= gives `+`.
+    // Both should count as "zoom in" to match browser convention.
+    if (e.key === '=' || e.key === '+') kind = 'zoomIn';
+    else if (e.key === '-' || e.key === '_') kind = 'zoomOut';
+    else if (e.key === '0')                  kind = 'zoomReset';
+    if (!kind) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      if (window.webkit && window.webkit.messageHandlers &&
+          window.webkit.messageHandlers.beadsBridge) {
+        window.webkit.messageHandlers.beadsBridge.postMessage({ type: kind });
+      }
+    } catch (err) { NPP.warn('zoom bridge post failed:', err); }
+  }, true /* capture phase */);
+
   // ── Native-facing helpers that reach into the Rich viewer's Alpine
   //    root. All guard against Alpine not being loaded (our own app/
   //    pages have no Alpine, so these are safe no-ops there). We use

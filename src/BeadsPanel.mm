@@ -57,6 +57,18 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
 // Dict of { standardized projectRoot : ISO-8601 string }.
 static NSString * const kBeadsLastVisitKey = @"NppBeadsLastActivityVisit";
 
+// Option B (⌘+/⌘-/⌘0): persistent per-user page-zoom for the WKWebView.
+// Defaults to 0.8 (20% smaller than upstream) so Dashboard / Insights
+// fit a reasonable panel width without the user having to re-drag the
+// dock divider. User-adjustable via Cmd+/-/0 shortcuts captured by a
+// keydown listener inside bridge.js (posts zoomIn/zoomOut/zoomReset
+// bridge messages back to us).
+static NSString * const kBeadsPanelZoomKey = @"NppBeadsPanelZoom";
+static const CGFloat kBeadsZoomDefault = 0.80;
+static const CGFloat kBeadsZoomMin     = 0.50;
+static const CGFloat kBeadsZoomMax     = 2.00;
+static const CGFloat kBeadsZoomStep    = 0.10;
+
 @implementation BeadsPanel {
     WKWebView          *_webView;
     NSButton           *_projectChip;    // borderless button; click → switcher menu
@@ -242,6 +254,11 @@ static NSString * const kBeadsLastVisitKey = @"NppBeadsLastActivityVisit";
     _webView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:config];
     _webView.translatesAutoresizingMaskIntoConstraints = NO;
     _webView.navigationDelegate = self;
+
+    // Apply the persisted page zoom — fresh installs default to
+    // kBeadsZoomDefault so Dashboard / Insights fit a reasonable panel
+    // width. User adjusts live via ⌘+/⌘-/⌘0 (see zoom handlers).
+    _webView.pageZoom = [self _loadPersistedZoom];
 
     // Observe URL changes so when the Rich viewer navigates internally
     // (e.g. user clicks an issue card in Insights and viewer jumps to
@@ -1510,6 +1527,12 @@ static NSString * const kBeadsLastVisitKey = @"NppBeadsLastActivityVisit";
         [self _handleAddComment:body requestId:body[@"reqId"]];
     } else if ([type isEqualToString:@"fetchBead"]) {
         [self _handleFetchBead:body requestId:body[@"reqId"]];
+    } else if ([type isEqualToString:@"zoomIn"]) {
+        [self _adjustPageZoomBy:+kBeadsZoomStep];
+    } else if ([type isEqualToString:@"zoomOut"]) {
+        [self _adjustPageZoomBy:-kBeadsZoomStep];
+    } else if ([type isEqualToString:@"zoomReset"]) {
+        [self _setPageZoom:kBeadsZoomDefault persist:YES];
     } else {
         // Unknown message — ignore for forward-compat.
     }
@@ -1763,6 +1786,42 @@ static NSString * const kBeadsLastVisitKey = @"NppBeadsLastActivityVisit";
         [s _resolveRequest:reqId ok:(err == nil) bead:nil error:err];
         if (!err) [s _broadcastDataChanged];
     }];
+}
+
+// Option B zoom helpers. Called from the bridge when the JS-side
+// keydown listener in bridge.js catches ⌘+/⌘-/⌘0 inside the webview.
+
+- (CGFloat)_loadPersistedZoom {
+    // -doubleForKey: returns 0.0 when the key is absent — use that as
+    // the "never set" signal and fall back to the default. Also defend
+    // against clipped values that could wander outside our clamps if
+    // a user manually edits defaults.
+    NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
+    if (![defs objectForKey:kBeadsPanelZoomKey]) return kBeadsZoomDefault;
+    double z = [defs doubleForKey:kBeadsPanelZoomKey];
+    if (z < kBeadsZoomMin - 0.001) return kBeadsZoomDefault;
+    if (z > kBeadsZoomMax + 0.001) return kBeadsZoomDefault;
+    return (CGFloat)z;
+}
+
+- (void)_setPageZoom:(CGFloat)zoom persist:(BOOL)persist {
+    if (!_webView) return;
+    CGFloat clamped = MAX(kBeadsZoomMin, MIN(kBeadsZoomMax, zoom));
+    _webView.pageZoom = clamped;
+    if (persist) {
+        [[NSUserDefaults standardUserDefaults] setDouble:(double)clamped
+                                                  forKey:kBeadsPanelZoomKey];
+    }
+    NSLog(@"[NppBeads] pageZoom = %.2f", (double)clamped);
+}
+
+- (void)_adjustPageZoomBy:(CGFloat)delta {
+    if (!_webView) return;
+    // Snap to a 0.05 grid to avoid floating-point drift on repeated
+    // ⌘+/⌘- presses (otherwise zoom creeps to 0.8000000000001).
+    CGFloat next = _webView.pageZoom + delta;
+    next = round(next * 20.0) / 20.0;
+    [self _setPageZoom:next persist:YES];
 }
 
 // Phase 6 — fetch a single bead with its full payload (dependencies +
