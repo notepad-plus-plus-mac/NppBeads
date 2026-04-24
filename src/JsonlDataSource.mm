@@ -171,5 +171,9 @@ static NSError *readOnlyError(void) {
            completion:(void (^)(NSDictionary *, NSError *))done {
     dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(nil, readOnlyError()); });
 }
+- (void)addCommentToIssue:(NSString *)i body:(NSString *)b
+               completion:(void (^)(NSError *))done {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(readOnlyError()); });
+}
 
 @end

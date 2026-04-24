@@ -782,4 +782,26 @@ static NSArray<NSString *> *collectStderrWarnings(NSString *stderrStr) {
     }];
 }
 
+- (void)addCommentToIssue:(NSString *)issueId
+                     body:(NSString *)body
+               completion:(void (^)(BdResult *))done {
+    if (issueId.length == 0 || body.length == 0) {
+        BdResult *r = [[BdResult alloc] init];
+        r.errorMessage = (issueId.length == 0) ? @"issueId is empty"
+                                                : @"comment body is empty";
+        dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(r); });
+        return;
+    }
+    [self _runOnIoQueue:^{
+        // Route body via stdin → survives newlines, quotes, $, backticks,
+        // and anything else the user might paste. Same pattern as our
+        // create/update paths that take --body-file=-.
+        BdResult *r = [self _execute:@[@"comment", @"add", issueId,
+                                        @"--body-file=-", @"--json"]
+                                stdin:body];
+        if (r.ok) [self invalidateCache];
+        dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(r); });
+    }];
+}
+
 @end

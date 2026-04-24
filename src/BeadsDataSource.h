@@ -118,6 +118,11 @@ typedef NS_ENUM(NSInteger, BeadsDataSourceErrorCode) {
            completion:(void (^)(NSDictionary * _Nullable issue,
                                 NSError * _Nullable error))done;
 
+/** Phase 6 — append a comment. Body is markdown; stored verbatim by bd. */
+- (void)addCommentToIssue:(NSString *)issueId
+                     body:(NSString *)body
+               completion:(void (^)(NSError * _Nullable error))done;
+
 /** Invalidate any read-cache. Called by the panel's Refresh button. */
 - (void)invalidateCache;
 

@@ -39,6 +39,7 @@ typedef NS_ENUM(NSInteger, BeadsViewMode) {
     BeadsViewModeInsights  = 2,   // Rich viewer — insights (top-rank / cycles / etc.)
     BeadsViewModeGraph     = 3,   // Rich viewer — force-directed graph
     BeadsViewModeBoard     = 4,   // Native kanban
+    BeadsViewModeActivity  = 5,   // Native activity feed (Phase 6)
 };
 
 // User-selectable theme override. Default is Auto (track macOS appearance).

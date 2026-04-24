@@ -455,6 +455,40 @@
     body.appendChild(depContainer);
     renderDepEditor(depContainer, b.id);
 
+    // Phase 6 — comments thread. JSONL export doesn't carry comments,
+    // so we fire a fetchBead bridge call and render them when it
+    // resolves. While pending, a subtle placeholder stops the section
+    // from flickering empty→populated. The add-comment form is always
+    // present so the user can start typing before fetch resolves.
+    const commentsContainer = el('div', { class: 'modal-comments' });
+    body.appendChild(commentsContainer);
+    renderComments(commentsContainer, b.id, { loading: true });
+    if (window.__nppBridge) {
+      window.__nppBridge.call('fetchBead', { id: b.id })
+        .then((resp) => {
+          if (resp && resp.ok && resp.bead) {
+            renderComments(commentsContainer, b.id, {
+              loading: false,
+              comments: Array.isArray(resp.bead.comments) ? resp.bead.comments : [],
+            });
+          } else {
+            renderComments(commentsContainer, b.id, {
+              loading: false,
+              error: (resp && resp.error) || 'could not load comments',
+            });
+          }
+        })
+        .catch((err) => {
+          renderComments(commentsContainer, b.id, {
+            loading: false,
+            error: (err && err.message) || String(err),
+          });
+        });
+    } else {
+      renderComments(commentsContainer, b.id,
+        { loading: false, error: 'bridge unavailable' });
+    }
+
     // Timestamps
     const ts = el('div', { class: 'modal-ts' });
     const pairs = [
@@ -885,6 +919,144 @@
     inp.addEventListener('change', submitAdd);
 
     container.appendChild(wrap);
+  }
+
+  // Phase 6 — render / re-render the comments thread for a bead inside
+  // the detail modal. Works off an options bag:
+  //   { loading: true }                         → spinner + form
+  //   { loading: false, comments: [...] }       → thread + form
+  //   { loading: false, error: 'msg' }          → error notice + form
+  // The add-comment form is always there so users can start typing
+  // before fetchBead returns.
+  function renderComments(container, beadId, opts) {
+    container.innerHTML = '';
+    container.appendChild(el('h4', { class: 'modal-comments-hdr' }, 'Comments'));
+
+    const statusLine = el('span',
+      { class: 'form-status comments-status-line' });
+    container.appendChild(statusLine);
+
+    const thread = el('div', { class: 'comments-thread' });
+    container.appendChild(thread);
+
+    if (opts.loading) {
+      thread.appendChild(el('p', { class: 'comments-loading' },
+        'Loading comments…'));
+    } else if (opts.error) {
+      thread.appendChild(el('p', { class: 'comments-error' },
+        'Error loading comments: ' + opts.error));
+    } else {
+      const cs = opts.comments || [];
+      if (cs.length === 0) {
+        thread.appendChild(el('p', { class: 'comments-empty' },
+          'No comments yet.'));
+      } else {
+        // Render each comment. bd's field set isn't stable across
+        // versions — read every plausible name and fall back cleanly.
+        for (const c of cs) {
+          thread.appendChild(renderSingleComment(c));
+        }
+      }
+    }
+
+    // Add-comment form — textarea + Submit. Cmd+Enter submits. Empty
+    // body is rejected client-side (bd also rejects).
+    const form = el('div', { class: 'comments-add' });
+    const ta = el('textarea', {
+      class: 'comments-add-body',
+      rows: '3',
+      placeholder: 'Add a comment (Markdown, ⌘↵ to submit)…',
+    });
+    const submit = el('button', {
+      type: 'button', class: 'btn btn-primary comments-add-submit',
+    }, 'Comment');
+    form.appendChild(ta);
+    form.appendChild(submit);
+    container.appendChild(form);
+
+    async function doSubmit() {
+      const body = ta.value.trim();
+      if (!body) {
+        statusLine.textContent = 'Empty comment — type something first.';
+        statusLine.classList.add('is-error');
+        ta.focus();
+        return;
+      }
+      if (!window.__nppBridge) {
+        statusLine.textContent = 'bridge unavailable';
+        statusLine.classList.add('is-error');
+        return;
+      }
+      submit.disabled = true;
+      ta.disabled = true;
+      statusLine.classList.remove('is-error');
+      statusLine.textContent = 'Posting…';
+      try {
+        const r = await window.__nppBridge.call('addComment',
+          { id: beadId, body });
+        if (r && r.ok) {
+          ta.value = '';
+          statusLine.textContent = '';
+          // Re-fetch and re-render with the new comment included.
+          try {
+            const r2 = await window.__nppBridge.call('fetchBead', { id: beadId });
+            renderComments(container, beadId, {
+              loading: false,
+              comments: (r2 && r2.ok && r2.bead && Array.isArray(r2.bead.comments))
+                ? r2.bead.comments : [],
+            });
+          } catch (e) {
+            // Best-effort: if refetch fails, the comment still posted.
+            // Next re-open of the modal will show it.
+            renderComments(container, beadId,
+              { loading: false, error: 'refetch failed — reopen modal to see it' });
+          }
+        } else {
+          statusLine.textContent = (r && r.error) || 'post failed';
+          statusLine.classList.add('is-error');
+        }
+      } catch (e) {
+        statusLine.textContent = (e && e.message) || String(e);
+        statusLine.classList.add('is-error');
+      } finally {
+        submit.disabled = false;
+        ta.disabled = false;
+      }
+    }
+
+    submit.addEventListener('click', doSubmit);
+    ta.addEventListener('keydown', (e) => {
+      // Cmd+Enter (macOS) or Ctrl+Enter (cross-platform safety)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        doSubmit();
+      }
+    });
+  }
+
+  function renderSingleComment(c) {
+    const row = el('div', { class: 'comment-row' });
+    // Author / timestamp header — bd's field names vary; probe a few.
+    const author = c.author || c.created_by || c.user || c.actor || '';
+    const ts     = c.created_at || c.timestamp || c.createdAt || '';
+    const body   = (typeof c.body === 'string' && c.body) ? c.body
+                 : (typeof c.text === 'string' && c.text) ? c.text
+                 : (typeof c.content === 'string' && c.content) ? c.content
+                 : '';
+
+    const hdr = el('div', { class: 'comment-hdr' });
+    if (author) hdr.appendChild(el('span',
+      { class: 'comment-author' }, '@' + author));
+    if (ts) hdr.appendChild(el('span',
+      { class: 'comment-ts' }, App.fmtTime(ts)));
+    row.appendChild(hdr);
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'comment-body';
+    bodyEl.innerHTML = App.renderMarkdown(body);
+    row.appendChild(bodyEl);
+
+    return row;
   }
 
   function buildExistingDepChip(d, opts) {

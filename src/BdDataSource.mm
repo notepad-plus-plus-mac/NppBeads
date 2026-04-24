@@ -160,4 +160,11 @@ static NSError *nserrorFromResult(BdResult *res) {
     }];
 }
 
+- (void)addCommentToIssue:(NSString *)issueId body:(NSString *)body
+               completion:(void (^)(NSError *))done {
+    [self.runner addCommentToIssue:issueId body:body completion:^(BdResult *res) {
+        if (done) done(res.ok ? nil : nserrorFromResult(res));
+    }];
+}
+
 @end

@@ -127,6 +127,11 @@
     </div>
   </template>
   <script src="../bridge.js"></script>
+  <!-- Phase 6 — markdown rendering for comments + descriptions. Both
+       libs ship UMD globals (marked, DOMPurify) and work offline since
+       they're vendored. -->
+  <script src="../vendor/marked.min.js"></script>
+  <script src="../vendor/dompurify.min.js"></script>
   <script src="app.js"></script>
   <script src="board.js"></script>
 </body>

@@ -52,6 +52,11 @@ static const NSUInteger kBeadsRecentProjectsCap = 10;
 // an array because NSSet isn't plist-native.
 static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
 
+// Phase 6 — per-project "last Activity view visit" timestamp. Drives the
+// status-bar "N new" badge: count issues with updated_at > lastVisit.
+// Dict of { standardized projectRoot : ISO-8601 string }.
+static NSString * const kBeadsLastVisitKey = @"NppBeadsLastActivityVisit";
+
 @implementation BeadsPanel {
     WKWebView          *_webView;
     NSButton           *_projectChip;    // borderless button; click → switcher menu
@@ -178,6 +183,7 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
     [_viewModePopup addItemWithTitle:@"Insights"];  [_viewModePopup.menu.itemArray.lastObject setTag:BeadsViewModeInsights];
     [_viewModePopup addItemWithTitle:@"Graph"];     [_viewModePopup.menu.itemArray.lastObject setTag:BeadsViewModeGraph];
     [_viewModePopup addItemWithTitle:@"Board"];     [_viewModePopup.menu.itemArray.lastObject setTag:BeadsViewModeBoard];
+    [_viewModePopup addItemWithTitle:@"Activity"];  [_viewModePopup.menu.itemArray.lastObject setTag:BeadsViewModeActivity];
     [_viewModePopup selectItemWithTag:_viewMode];
     _viewModePopup.target = self;
     _viewModePopup.action = @selector(_didChangeViewMode:);
@@ -399,6 +405,8 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
             return [NSURL URLWithString:@"nppbeads://viewer/index.html#/graph"];
         case BeadsViewModeBoard:
             return [NSURL URLWithString:@"nppbeads://viewer/app/board.html"];
+        case BeadsViewModeActivity:
+            return [NSURL URLWithString:@"nppbeads://viewer/app/activity.html"];
     }
     return [NSURL URLWithString:@"nppbeads://viewer/index.html#/"];
 }
@@ -643,6 +651,13 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
     [self _installJsonlUserScript];
     [_webView loadRequest:[NSURLRequest requestWithURL:url]];
     [self _refreshTitleBar];
+    // Phase 6 — visiting Activity acknowledges the "N new" badge and
+    // rebases it against now(). Refresh the status bar so the badge
+    // disappears immediately (next fresh update will re-populate).
+    if (_viewMode == BeadsViewModeActivity) {
+        [self _markActivityVisitedForCurrentProject];
+        [self _refreshStatusBar];
+    }
 }
 
 // Overflow "⋯" button reuses the right-click context menu.
@@ -667,8 +682,10 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
 - (void)_pushSearchQuery:(NSString *)q {
     if (!_viewerLoaded) return;
     NSString *js = nil;
-    if (_viewMode == BeadsViewModeBoard) {
-        // Board (our native page) exposes window.__nppApp.setFilter.
+    if (_viewMode == BeadsViewModeBoard ||
+        _viewMode == BeadsViewModeActivity) {
+        // Board + Activity both use __nppApp.setFilter. Activity's
+        // applyFilter is wired to its render() which filters the list.
         js = [NSString stringWithFormat:
             @"if (window.__nppApp && typeof window.__nppApp.setFilter === 'function') {"
              "  window.__nppApp.setFilter({ query: %@ });"
@@ -1307,11 +1324,12 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
     _projectChip.enabled = YES;
     [_viewModePopup selectItemWithTag:_viewMode];
 
-    // Search field: Board + Issues (where per-issue filtering applies).
-    // Dashboard / Insights are aggregates; Graph has its own "Find node…".
-    // Issues uses a LIKE fallback on loadIssues (we bypass FTS5).
+    // Search field: Board + Issues + Activity (views with per-issue
+    // filtering). Dashboard / Insights are aggregates; Graph has its
+    // own "Find node…". Issues uses a LIKE fallback on loadIssues.
     BOOL showSearch = (_viewMode == BeadsViewModeBoard ||
-                       _viewMode == BeadsViewModeIssues);
+                       _viewMode == BeadsViewModeIssues ||
+                       _viewMode == BeadsViewModeActivity);
     _searchField.hidden = !showSearch;
     if (!showSearch && _searchField.stringValue.length) {
         // Clear any stale query so switching back to Board shows the
@@ -1336,12 +1354,77 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
     NSUInteger blkd  = [_ds blockedIssueCount];
     NSUInteger cls   = [_ds closedIssueCount];
     NSString *backend = _activeDataSource.backendLabel ?: @"read-only (JSONL)";
+    NSUInteger newCount = [self _newActivityCountSinceLastVisit];
+    NSString *badge = (newCount > 0)
+        ? [NSString stringWithFormat:@" · ● %lu new", (unsigned long)newCount]
+        : @"";
     _statusLabel.stringValue = [NSString stringWithFormat:
-        @"%@ · %lu issues (%lu open · %lu blocked · %lu closed) · %@",
+        @"%@ · %lu issues (%lu open · %lu blocked · %lu closed) · %@%@",
         self.project.projectRoot.lastPathComponent ?: @"(project)",
         (unsigned long)total, (unsigned long)open,
         (unsigned long)blkd,  (unsigned long)cls,
-        backend];
+        backend, badge];
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Phase 6 — "N new" badge helpers. Uses updated_at from the parsed JSONL
+//  (no bd calls). "Acknowledged" when the user visits the Activity view.
+// ─────────────────────────────────────────────────────────────────────────
+
+- (NSString *)_lastActivityVisitForCurrentProject {
+    if (!self.project || self.project.projectRoot.length == 0) return nil;
+    NSDictionary *dict = [[NSUserDefaults standardUserDefaults]
+                          dictionaryForKey:kBeadsLastVisitKey];
+    NSString *std = [self.project.projectRoot stringByStandardizingPath];
+    if (![dict isKindOfClass:[NSDictionary class]] || std.length == 0) return nil;
+    id v = dict[std];
+    return [v isKindOfClass:[NSString class]] ? v : nil;
+}
+
+- (void)_markActivityVisitedForCurrentProject {
+    if (!self.project || self.project.projectRoot.length == 0) return;
+    NSString *std = [self.project.projectRoot stringByStandardizingPath];
+    if (std.length == 0) return;
+    NSMutableDictionary *dict =
+        [[[NSUserDefaults standardUserDefaults] dictionaryForKey:kBeadsLastVisitKey] mutableCopy];
+    if (!dict) dict = [NSMutableDictionary dictionary];
+    NSISO8601DateFormatter *f = [[NSISO8601DateFormatter alloc] init];
+    f.formatOptions = NSISO8601DateFormatWithInternetDateTime |
+                      NSISO8601DateFormatWithFractionalSeconds;
+    dict[std] = [f stringFromDate:[NSDate date]];
+    [[NSUserDefaults standardUserDefaults] setObject:dict forKey:kBeadsLastVisitKey];
+}
+
+// Count beads whose updated_at (or created_at fallback) is STRICTLY later
+// than the stored last-visit timestamp. No stored timestamp → everything
+// is "new" until the user visits Activity once.
+- (NSUInteger)_newActivityCountSinceLastVisit {
+    NSString *since = [self _lastActivityVisitForCurrentProject];
+    // No lastVisit recorded yet — don't surface a giant "N new" badge on
+    // first open (would be the full issue count). Return 0 until the
+    // user has visited Activity at least once.
+    if (since.length == 0) return 0;
+    NSString *raw = [_ds rawText] ?: @"";
+    if (raw.length == 0) return 0;
+    NSUInteger count = 0;
+    for (NSString *line in [raw componentsSeparatedByString:@"\n"]) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+                             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (trimmed.length == 0) continue;
+        NSData *data = [trimmed dataUsingEncoding:NSUTF8StringEncoding];
+        id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![obj isKindOfClass:[NSDictionary class]]) continue;
+        NSString *when = [(NSDictionary *)obj objectForKey:@"updated_at"];
+        if (![when isKindOfClass:[NSString class]] || when.length == 0) {
+            when = [(NSDictionary *)obj objectForKey:@"created_at"];
+        }
+        if (![when isKindOfClass:[NSString class]] || when.length == 0) continue;
+        // String comparison works for ISO 8601 timestamps since they're
+        // lexicographically sortable — avoids a full date-parse round-trip
+        // per line. Matches bd's output format.
+        if ([when compare:since] == NSOrderedDescending) count++;
+    }
+    return count;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1375,6 +1458,13 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
             _viewerLoaded = NO;
             [_webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:href]]];
         }
+    } else if ([type isEqualToString:@"openBeadModal"]) {
+        // Phase 6 — from Activity view, clicking a row routes here.
+        // showBeadDetail: handles the view switch + post-load JS queue.
+        NSString *bid = body[@"id"];
+        if ([bid isKindOfClass:[NSString class]] && bid.length > 0) {
+            [self showBeadDetail:bid];
+        }
     } else if ([type isEqualToString:@"updateBead"]) {
         [self _handleUpdateBead:body requestId:body[@"reqId"]];
     } else if ([type isEqualToString:@"createBead"]) {
@@ -1393,6 +1483,10 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
         [self _handleDeleteBead:body requestId:body[@"reqId"]];
     } else if ([type isEqualToString:@"unassignBead"]) {
         [self _handleUnassignBead:body requestId:body[@"reqId"]];
+    } else if ([type isEqualToString:@"addComment"]) {
+        [self _handleAddComment:body requestId:body[@"reqId"]];
+    } else if ([type isEqualToString:@"fetchBead"]) {
+        [self _handleFetchBead:body requestId:body[@"reqId"]];
     } else {
         // Unknown message — ignore for forward-compat.
     }
@@ -1627,6 +1721,49 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
     }];
 }
 
+- (void)_handleAddComment:(NSDictionary *)body requestId:(NSString *)reqId {
+    NSString *bid  = [body[@"id"]   isKindOfClass:[NSString class]] ? body[@"id"]   : nil;
+    NSString *text = [body[@"body"] isKindOfClass:[NSString class]] ? body[@"body"] : nil;
+    if (!bid.length || !text.length) {
+        NSString *msg = !bid.length ? @"missing id" : @"empty comment body";
+        [self _resolveRequest:reqId ok:NO bead:nil
+                        error:[NSError errorWithDomain:BeadsDataSourceErrorDomain
+                                                  code:BeadsDataSourceErrorGeneric
+                                              userInfo:@{NSLocalizedDescriptionKey:msg}]];
+        return;
+    }
+    NSLog(@"[NppBeads] addComment id=%@ bodyLen=%lu", bid, (unsigned long)text.length);
+    __weak typeof(self) weakSelf = self;
+    [_activeDataSource addCommentToIssue:bid body:text completion:^(NSError *err) {
+        __strong typeof(self) s = weakSelf;
+        if (!s) return;
+        [s _resolveRequest:reqId ok:(err == nil) bead:nil error:err];
+        if (!err) [s _broadcastDataChanged];
+    }];
+}
+
+// Phase 6 — fetch a single bead with its full payload (dependencies +
+// comments, which the JSONL export omits for comments). Used by the
+// detail modal's comments section to get the live comment list.
+- (void)_handleFetchBead:(NSDictionary *)body requestId:(NSString *)reqId {
+    NSString *bid = [body[@"id"] isKindOfClass:[NSString class]] ? body[@"id"] : nil;
+    if (!bid.length) {
+        [self _resolveRequest:reqId ok:NO bead:nil
+                        error:[NSError errorWithDomain:BeadsDataSourceErrorDomain
+                                                  code:BeadsDataSourceErrorGeneric
+                                              userInfo:@{NSLocalizedDescriptionKey:@"missing id"}]];
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    [_activeDataSource showIssue:bid completion:^(NSDictionary *bead, NSError *err) {
+        __strong typeof(self) s = weakSelf;
+        if (!s) return;
+        [s _resolveRequest:reqId ok:(err == nil) bead:bead error:err];
+        // No broadcast — this is a read. Cache invalidation on writes
+        // already covers freshness.
+    }];
+}
+
 - (void)_pushJsonlToBridge {
     NSString *raw = [_ds rawText];
     NSString *js = [NSString stringWithFormat:
@@ -1697,6 +1834,9 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
 
 - (void)_hostWindowBecameKey:(NSNotification *)note {
     [_poll resume];
+    // Phase 6 — user is back; recompute the "N new" badge against any
+    // JSONL that landed while the panel was blurred.
+    [self _refreshStatusBar];
 }
 
 - (void)_hostWindowResignedKey:(NSNotification *)note {
@@ -1743,7 +1883,8 @@ static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
 - (BeadsViewMode)_viewModeFromURL:(NSURL *)url {
     NSString *path = url.path ?: @"";
     NSString *frag = url.fragment ?: @"";
-    if ([path hasSuffix:@"/app/board.html"]) return BeadsViewModeBoard;
+    if ([path hasSuffix:@"/app/board.html"])    return BeadsViewModeBoard;
+    if ([path hasSuffix:@"/app/activity.html"]) return BeadsViewModeActivity;
     if ([path hasSuffix:@"/index.html"] || path.length == 0) {
         if ([frag hasPrefix:@"/graph"])    return BeadsViewModeGraph;
         if ([frag hasPrefix:@"/insights"]) return BeadsViewModeInsights;

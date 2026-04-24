@@ -56,9 +56,60 @@
       updatedAt:   r.updated_at || null,
       closedAt:    r.closed_at || null,
       deps:        Array.isArray(r.dependencies) ? r.dependencies : [],
+      // Phase 6 — comments are only present on `bd show` output; bd export
+      // (JSONL) omits them. The Board pulls full record via fetchBead
+      // when the detail modal opens.
+      comments:    Array.isArray(r.comments) ? r.comments : [],
     };
     return out;
   }
+
+  // Phase 6 — render a markdown string to sanitized HTML. Falls back to
+  // plain text (with newlines → <br>) when marked/DOMPurify aren't
+  // loaded (e.g. first-ever run before vendor scripts settle). Never
+  // returns unsanitized HTML — we route every path through DOMPurify
+  // when available.
+  App.renderMarkdown = function (text) {
+    const s = (typeof text === 'string') ? text : '';
+    if (!s) return '';
+    try {
+      if (typeof window.marked !== 'undefined' &&
+          typeof window.DOMPurify !== 'undefined') {
+        const raw = window.marked.parse(s, { breaks: true, gfm: true });
+        return window.DOMPurify.sanitize(raw, {
+          // Allow basic formatting + links + images. No scripts.
+          ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'code', 'pre',
+                         'a', 'ul', 'ol', 'li', 'blockquote', 'hr',
+                         'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                         'table', 'thead', 'tbody', 'tr', 'th', 'td',
+                         'img', 'del', 'span'],
+          ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class'],
+          ALLOW_DATA_ATTR: false,
+        });
+      }
+    } catch (e) { /* fall through to plain-text fallback */ }
+    // Plain-text fallback — escape + turn newlines into <br>.
+    const esc = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return esc.replace(/\n/g, '<br>');
+  };
+
+  // Extract a displayable timestamp from a bd comment/issue record.
+  App.fmtTime = function (ts) {
+    if (!ts) return '';
+    try {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return String(ts);
+      const now = new Date();
+      const sameDay = d.toDateString() === now.toDateString();
+      const h = String(d.getHours()).padStart(2, '0');
+      const m = String(d.getMinutes()).padStart(2, '0');
+      if (sameDay) return h + ':' + m;
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const dy = String(d.getDate()).padStart(2, '0');
+      return y + '-' + mo + '-' + dy + ' ' + h + ':' + m;
+    } catch (e) { return String(ts); }
+  };
 
   // Format a source_repo value for display — if it looks like a path,
   // use the last component; otherwise show the string as-is.
