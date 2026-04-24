@@ -932,9 +932,16 @@ static NSString * const kBeadsLastVisitKey = @"NppBeadsLastActivityVisit";
         [[NSPasteboard generalPasteboard] clearContents];
         [[NSPasteboard generalPasteboard] setString:s forType:NSPasteboardTypeString];
 
+        // Short confirmation — the full diagnostic text is on the
+        // clipboard for paste-into-bug-report; showing the whole thing
+        // in the alert locked the panel on smaller screens because the
+        // alert grew taller than the display.
         NSAlert *a = [[NSAlert alloc] init];
         a.messageText = @"NppBeads diagnostics copied";
-        a.informativeText = s;
+        a.informativeText = [NSString stringWithFormat:
+            @"%lu bytes copied to the clipboard. Paste it into a bug report "
+             "or Preview the contents in any text editor.",
+            (unsigned long)s.length];
         [a addButtonWithTitle:@"OK"];
         [a runModal];
     }];
@@ -1868,6 +1875,16 @@ static NSString * const kBeadsLastVisitKey = @"NppBeadsLastActivityVisit";
 
 // KVO: webView.URL changed. Map it back to a BeadsViewMode and update
 // the popup so internal navigation stays in sync with our toolbar.
+//
+// Also critical for fragment-only navigations: WKWebView often doesn't
+// fire didFinishNavigation when ONLY the URL fragment changes (e.g.
+// Dashboard #/ → Issues #/issues — same index.html). Without a signal
+// that the "new view" is ready, _viewerLoaded stays NO forever and
+// anything gated on it (toolbar search, post-load JS queue, etc.)
+// silently bails. The KVO observer is the reliable signal: if the path
+// resolves to a page we recognize AND the DOM is already loaded (it is,
+// since we're just navigating a fragment on an already-loaded page),
+// flip _viewerLoaded back to YES and drain any pending actions.
 - (void)observeValueForKeyPath:(NSString *)keyPath
                       ofObject:(id)object
                         change:(NSDictionary<NSKeyValueChangeKey,id> *)change
@@ -1880,6 +1897,30 @@ static NSString * const kBeadsLastVisitKey = @"NppBeadsLastActivityVisit";
         _viewMode = detected;
         [_viewModePopup selectItemWithTag:_viewMode];
         [self _refreshTitleBar];
+    }
+    // Fragment-only navigation fix: if URL is now a known route and we
+    // still think the viewer isn't loaded, adopt the new URL as ready.
+    // Guard on URL.path ending with index.html or an app/*.html — any
+    // other URL (error page, data: blob) shouldn't auto-flag.
+    if (!_viewerLoaded) {
+        NSString *path = url.path ?: @"";
+        if ([path hasSuffix:@"/index.html"] ||
+            [path hasSuffix:@"/app/board.html"] ||
+            [path hasSuffix:@"/app/activity.html"]) {
+            _viewerLoaded = YES;
+            // Drain anything queued for post-load (Phase 5 modal-open
+            // directives, search-query flushes).
+            if (_pendingPostLoadJS.length) {
+                NSString *js = _pendingPostLoadJS;
+                _pendingPostLoadJS = nil;
+                [_webView evaluateJavaScript:js completionHandler:nil];
+            }
+            // If a search was typed during the dark window, replay it
+            // now that the bridge is reachable.
+            if (_lastSearchQuery.length) {
+                [self _pushSearchQuery:_lastSearchQuery];
+            }
+        }
     }
 }
 
