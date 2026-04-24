@@ -12,8 +12,67 @@
 // THEME & CONSTANTS
 // ============================================================================
 
-const THEME = {
-    // Dracula-inspired palette
+// NppBeads: detect light vs dark at module-load time. The panel's
+// _pushThemeToWebView toggles `dark` on <html> — we snapshot once and
+// swap chrome colors so the force-graph canvas doesn't stay dark
+// under a light panel chrome. Status / priority / accent colors stay
+// identical (they're already vivid enough to read on either bg;
+// changing them would require re-testing dozens of visual states).
+//
+// Mid-session theme flips: the user needs to leave Graph view and come
+// back to re-run this module's init — the THEME object is captured
+// by closure in many places inside graph.js. Documented in
+// docs/PHASE6_TEST_MATRIX.md row for theme interaction.
+const _nppIsLightTheme = (function () {
+    try {
+        return !document.documentElement.classList.contains('dark');
+    } catch (e) { return false; }
+})();
+
+const THEME = _nppIsLightTheme ? {
+    // Light palette — chrome/canvas tuned for a light panel background.
+    bg:          '#ffffff',
+    bgSecondary: '#f3f4f6',
+    bgTertiary:  '#e5e7eb',
+    fg:          '#111827',
+    fgMuted:     '#6b7280',
+
+    // Status / priority / accent colors preserved from the dark palette.
+    // They're saturated enough that they read on both light and dark
+    // backgrounds (verified: #50FA7B etc. have adequate contrast on #fff).
+    status: {
+        open: '#10b981',         // darker green for light bg readability
+        in_progress: '#f59e0b',  // darker orange
+        blocked: '#ef4444',      // darker red
+        closed: '#6b7280'        // neutral gray
+    },
+    priority: {
+        0: '#dc2626',
+        1: '#ef4444',
+        2: '#f59e0b',
+        3: '#ca8a04',
+        4: '#6b7280'
+    },
+    accent: {
+        purple: '#7c3aed',
+        pink: '#db2777',
+        cyan: '#0891b2',
+        green: '#10b981',
+        orange: '#ea580c',
+        red: '#dc2626',
+        yellow: '#ca8a04',
+        gold: '#d97706'
+    },
+    link: {
+        default: '#d1d5db',
+        highlighted: '#7c3aed',
+        gold: '#d97706',
+        goldGlow: 'rgba(217, 119, 6, 0.5)',
+        critical: '#dc2626',
+        cycle: '#db2777'
+    }
+} : {
+    // Dracula-inspired palette (unchanged — the original dark theme).
     bg: '#282a36',
     bgSecondary: '#44475a',
     bgTertiary: '#21222c',

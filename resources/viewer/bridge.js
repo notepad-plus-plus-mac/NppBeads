@@ -375,13 +375,32 @@
     }
 
     // 4) Populate FTS from the issues table.
+    //
+    // issues_fts was created with content='issues' (external-content
+    // FTS5). The canonical population command for this configuration
+    // is `INSERT INTO issues_fts(issues_fts) VALUES('rebuild')` —
+    // a special form that rebuilds the FTS index from the content
+    // table. The direct `INSERT INTO issues_fts(rowid,...) SELECT ...`
+    // pattern silently leaves the index empty in some sql-wasm builds
+    // (observed: Issues view searches return 0 results even though bd
+    // shows matching issues). We try the rebuild first and keep the
+    // direct INSERT as a belt-and-suspenders fallback.
     NPP.log('step: populate FTS');
     if (ftsEnabled) {
+      let populated = false;
       try {
-        db.run("INSERT INTO issues_fts(rowid,id,title,description) " +
-               "SELECT rowid,id,title,description FROM issues;");
-      } catch (e) {
-        NPP.warn('FTS populate failed:', e && e.message);
+        db.run("INSERT INTO issues_fts(issues_fts) VALUES('rebuild');");
+        populated = true;
+      } catch (e1) {
+        NPP.warn('FTS rebuild failed, trying direct INSERT:', e1 && e1.message);
+      }
+      if (!populated) {
+        try {
+          db.run("INSERT INTO issues_fts(rowid,id,title,description) " +
+                 "SELECT rowid,id,title,description FROM issues;");
+        } catch (e2) {
+          NPP.warn('FTS populate failed:', e2 && e2.message);
+        }
       }
     }
 

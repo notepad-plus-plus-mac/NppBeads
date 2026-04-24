@@ -2192,7 +2192,10 @@ function beadsApp() {
     issues: [],
     totalIssues: 0,
     page: 1,
-    pageSize: 20,
+    // NppBeads: bumped from upstream 20 → 100 per user request. Rows
+    // are cheap to render and the full-buffer display is more useful
+    // than having to page through twenty at a time.
+    pageSize: 100,
 
     // Filter options (populated from database)
     filterOptions: {
