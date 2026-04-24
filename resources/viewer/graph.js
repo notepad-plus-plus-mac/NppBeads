@@ -1542,22 +1542,51 @@ function drawLink(link, ctx, globalScale) {
     ctx.quadraticCurveTo(cx, cy, end.x, end.y);
     ctx.stroke();
 
-    // Arrowhead
+    // Arrowhead — NppBeads fix:
+    //  1. Position + angle now use the Bézier TANGENT at t=1, not the
+    //     straight-line chord. Old code computed both as if the link
+    //     were a straight segment, so on a curved link the arrow
+    //     floated off the curve and pointed slightly wrong.
+    //  2. Skip-threshold lowered from `dist < endSize + 1` to a small
+    //     fixed minimum. The old check dropped arrows whenever close
+    //     nodes had overlapping radii — common inside dense clusters,
+    //     so a lot of arrows silently vanished.
+    //  3. arrowLen grew from 8/globalScale to 12/globalScale (50%
+    //     larger on screen) and we lift the arrow's effective opacity
+    //     to at least 0.85 so even faded/low-priority links still
+    //     show a readable arrowhead.
     const endSize = getNodeSize(end);
-    const arrowLen = Math.min(10, 8 / globalScale);
+    const arrowLen = Math.min(16, 12 / globalScale);
 
-    // Skip arrow if nodes overlap (dist too small)
-    if (dist < endSize + 1) {
+    // Only skip on degenerate zero-length links — dense-cluster
+    // overlap is OK; the arrow will tuck against the target node edge.
+    if (dist < 2) {
         ctx.restore();
         return;
     }
 
-    // Calculate arrow position (at edge of target node)
-    const t = 1 - endSize / dist;
-    const arrowX = start.x + t * dx;
-    const arrowY = start.y + t * dy;
+    // Tangent of a quadratic Bézier at parameter t is
+    //   B'(t) = 2(1-t)(P1-P0) + 2t(P2-P1)
+    // At t=1 (the target end) that simplifies to 2·(P2-P1) ∝ (end-cp).
+    // So the unit tangent direction at `end` is just (end-control)
+    // normalized.
+    const tdx = end.x - cx;
+    const tdy = end.y - cy;
+    const tlen = Math.sqrt(tdx * tdx + tdy * tdy) || 1;
+    const ux = tdx / tlen;
+    const uy = tdy / tlen;
 
-    const angle = Math.atan2(end.y - start.y, end.x - start.x);
+    // Pull the arrow tip back from the target's center by `endSize`
+    // (the radius), so the tip just kisses the node circle.
+    const arrowX = end.x - endSize * ux;
+    const arrowY = end.y - endSize * uy;
+    const angle = Math.atan2(tdy, tdx);
+
+    // Force the arrow visible even when the link is dimmed. Most
+    // legibility issues came from the dimmed-link case where the
+    // line was barely there AND the arrowhead inherited that fade.
+    const prevAlpha = ctx.globalAlpha;
+    ctx.globalAlpha = Math.max(prevAlpha, 0.85);
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.moveTo(arrowX, arrowY);
@@ -1571,6 +1600,7 @@ function drawLink(link, ctx, globalScale) {
     );
     ctx.closePath();
     ctx.fill();
+    ctx.globalAlpha = prevAlpha;
 
     ctx.restore();
 }
