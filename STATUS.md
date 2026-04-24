@@ -1,6 +1,6 @@
 # NppBeads — Current Status
 
-*Last updated: 2026-04-23 (end of Phase 4)*
+*Last updated: 2026-04-24 (end of Phase 3.5)*
 
 ## Shipped (on `main`)
 
@@ -10,10 +10,12 @@
 | 2     | *no tag*  | Native Kanban board, toolbar, theme sync, graph polish                                         |
 | 3     | *no tag*  | `bd` CLI write path: create / update / close / reopen / claim / dep add/remove                 |
 | 4     | *no tag*  | Live-sync poll · project switcher dropdown · survive no-file-open · source_repo pill           |
+| 3.5   | *no tag*  | Dep editor on detail modal · delete-issue · unassign · 10-type dep picker · per-project `--sandbox` toggle |
 
-Phases 3 and 4 are feature-complete but **untagged** (project policy: no
-version bump per user direction). Re-test locally via the matrices in
-`docs/PHASE3_TEST_MATRIX.md` + `docs/PHASE4_TEST_MATRIX.md`.
+Phases 3 / 4 / 3.5 are feature-complete but **untagged** (project policy:
+no version bump per user direction). Re-test locally via the matrices in
+`docs/PHASE3_TEST_MATRIX.md` + `docs/PHASE4_TEST_MATRIX.md` +
+`docs/PHASE3_5_TEST_MATRIX.md`.
 
 ## Working project tree
 
@@ -86,6 +88,24 @@ version bump per user direction). Re-test locally via the matrices in
   card drag defer until dragend, preventing the dragged node from being
   yanked
 
+**Phase 3.5 editing extras**
+- Dep editor in detail modal: existing deps shown as removable chips
+  with type-tag, add-row with full 10-type picker (blocks / parent-child
+  / conditional-blocks / waits-for / related / tracks / discovered-from
+  / caused-by / validates / supersedes). Re-renders after every op.
+- New-issue modal's Blocked-by and Blocks chip-inputs each carry their
+  own type picker; each chip records its type at add-time.
+- Delete-issue button (detail modal, red, between Claim and Cancel).
+  Confirm lists up to 8 dependents so the user knows what edges will
+  drop. bd cleans up dangling dep rows server-side.
+- Unassign — clearing a previously-set assignee in the Save form routes
+  through `unassignBead` (bd's `--unassign`) before the regular update.
+  Fixes the silent no-op where `--assignee ""` was ignored.
+- Per-project `--sandbox` toggle (⋯ menu → "Enable bd auto-push for
+  this project"). Default is sandbox ON (auto-push disabled, 100×
+  faster). Opt-in is persisted in `NppBeadsAutoPushProjects` defaults;
+  BdCommandRunner.useSandbox applied at bind time.
+
 ## Key performance/UX decisions
 
 - **`--sandbox` on every bd call.** Disables dolt auto-push. Cuts bd
@@ -103,13 +123,14 @@ version bump per user direction). Re-test locally via the matrices in
   `type` as the bd `--type` flag was a real bug we fixed (see commit
   `7524427` predecessor).
 
-## Deferred to Phase 3.5
+## Phase 3.5 — shipped
 
-- Dep add/remove on the **existing-issue** detail modal (creation-only today)
-- Delete-issue action with confirm (use `bd delete <id>` in CLI)
-- Clear-assignee wiring (needs `bd update --unassign`; today empty field is ignored)
-- Non-`blocks` dep types in the UI (`tracks`, `related`, `parent-child`, `discovered-from`, `until`, `caused-by`, `validates`, `relates-to`, `supersedes`)
-- A toggle to disable `--sandbox` per-project for users who actually want auto-push
+All five deferred items landed:
+- ✅ Dep add/remove on the existing-issue detail modal
+- ✅ Delete-issue action with confirm + dep-sweep warning
+- ✅ `--unassign` wiring on the detail-modal Save path
+- ✅ Full 10-type dep picker (both new-issue and detail modal)
+- ✅ Per-project sandbox opt-out (overflow-menu toggle)
 
 ## Next major phases
 
@@ -137,5 +158,6 @@ while Notepad++ is running.
 
 - Repo: `github.com:notepad-plus-plus-mac/NppBeads.git`
 - Phase 3 final commit: `7ec1480` (Phase 3 closeout)
-- Phase 4 commits on main (no tag): `ee5931c` (BeadsPoll) · `4f30c9f` (switcher + survive no-file-open) · `2335eb0` (source_repo pill)
+- Phase 4 commits on main (no tag): `ee5931c` (BeadsPoll) · `4f30c9f` (switcher + survive no-file-open) · `2335eb0` (source_repo pill) · `ae419ef` (probe-race fix + docs) · `2dfab91` (chevron fix)
+- Phase 3.5 commits on main (no tag): `e04536e` (native delete + unassign + sandbox toggle) · `bcb382d` (JS dep manager + delete + unassign + type picker)
 - `main` is pushed and current
