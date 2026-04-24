@@ -12,112 +12,110 @@
 // THEME & CONSTANTS
 // ============================================================================
 
-// NppBeads: detect light vs dark at module-load time. The panel's
-// _pushThemeToWebView toggles `dark` on <html> — we snapshot once and
-// swap chrome colors so the force-graph canvas doesn't stay dark
-// under a light panel chrome. Status / priority / accent colors stay
-// identical (they're already vivid enough to read on either bg;
-// changing them would require re-testing dozens of visual states).
+// NppBeads: split palette so the THEME object can be swapped live when
+// the user toggles dark/light mode. All hot-path canvas render callbacks
+// (node paint, link paint, label paint — lines ~1255–1300) read
+// THEME.* each frame, so swapping the object immediately re-colors the
+// graph on the next animation tick. The force-graph's canvas background
+// is a one-shot setter — applyTheme() below re-applies it explicitly.
 //
-// Mid-session theme flips: the user needs to leave Graph view and come
-// back to re-run this module's init — the THEME object is captured
-// by closure in many places inside graph.js. Documented in
-// docs/PHASE6_TEST_MATRIX.md row for theme interaction.
-const _nppIsLightTheme = (function () {
-    try {
-        return !document.documentElement.classList.contains('dark');
-    } catch (e) { return false; }
-})();
+// Inline-style HTML templates using `${THEME.*}` (overlay panels,
+// tooltips) capture their colors at construction time. Ephemeral panels
+// (tooltips, hover cards) rebuild on next interaction and pick up the
+// new theme; any persistent panel built once at init would stay stale
+// — none currently exist in our bundled graph.js.
 
-const THEME = _nppIsLightTheme ? {
-    // Light palette — chrome/canvas tuned for a light panel background.
-    bg:          '#ffffff',
-    bgSecondary: '#f3f4f6',
-    bgTertiary:  '#e5e7eb',
-    fg:          '#111827',
-    fgMuted:     '#6b7280',
-
-    // Status / priority / accent colors preserved from the dark palette.
-    // They're saturated enough that they read on both light and dark
-    // backgrounds (verified: #50FA7B etc. have adequate contrast on #fff).
-    status: {
-        open: '#10b981',         // darker green for light bg readability
-        in_progress: '#f59e0b',  // darker orange
-        blocked: '#ef4444',      // darker red
-        closed: '#6b7280'        // neutral gray
-    },
-    priority: {
-        0: '#dc2626',
-        1: '#ef4444',
-        2: '#f59e0b',
-        3: '#ca8a04',
-        4: '#6b7280'
-    },
-    accent: {
-        purple: '#7c3aed',
-        pink: '#db2777',
-        cyan: '#0891b2',
-        green: '#10b981',
-        orange: '#ea580c',
-        red: '#dc2626',
-        yellow: '#ca8a04',
-        gold: '#d97706'
-    },
-    link: {
-        default: '#d1d5db',
-        highlighted: '#7c3aed',
-        gold: '#d97706',
-        goldGlow: 'rgba(217, 119, 6, 0.5)',
-        critical: '#dc2626',
-        cycle: '#db2777'
-    }
-} : {
-    // Dracula-inspired palette (unchanged — the original dark theme).
+const darkPalette = {
+    // Dracula-inspired palette.
     bg: '#282a36',
     bgSecondary: '#44475a',
     bgTertiary: '#21222c',
     fg: '#f8f8f2',
     fgMuted: '#6272a4',
 
-    // Status colors
     status: {
         open: '#50FA7B',
         in_progress: '#FFB86C',
         blocked: '#FF5555',
         closed: '#6272A4'
     },
-
-    // Priority heat (flame intensity)
     priority: {
-        0: '#FF0000',  // Critical
-        1: '#FF5555',  // High
-        2: '#FFB86C',  // Medium
-        3: '#F1FA8C',  // Low
-        4: '#6272A4'   // Backlog
+        0: '#FF0000', 1: '#FF5555', 2: '#FFB86C', 3: '#F1FA8C', 4: '#6272A4'
     },
-
-    // Accent colors
     accent: {
-        purple: '#BD93F9',
-        pink: '#FF79C6',
-        cyan: '#8BE9FD',
-        green: '#50FA7B',
-        orange: '#FFB86C',
-        red: '#FF5555',
-        yellow: '#F1FA8C',
-        gold: '#fbbf24'
+        purple: '#BD93F9', pink: '#FF79C6', cyan: '#8BE9FD', green: '#50FA7B',
+        orange: '#FFB86C', red: '#FF5555', yellow: '#F1FA8C', gold: '#fbbf24'
     },
-
-    // Link colors
     link: {
-        default: '#44475a',
-        highlighted: '#BD93F9',
-        gold: '#fbbf24',
-        goldGlow: 'rgba(251, 191, 36, 0.6)',
-        critical: '#FF5555',
-        cycle: '#FF79C6'
+        default: '#44475a', highlighted: '#BD93F9', gold: '#fbbf24',
+        goldGlow: 'rgba(251, 191, 36, 0.6)', critical: '#FF5555', cycle: '#FF79C6'
     }
 };
+
+const lightPalette = {
+    // Light palette — chrome/canvas tuned for a light panel background.
+    // Status / priority / accent colors are darker / more saturated so
+    // they read on a white bg (vs. the dark palette which assumes a
+    // Dracula-dark canvas).
+    bg:          '#ffffff',
+    bgSecondary: '#f3f4f6',
+    bgTertiary:  '#e5e7eb',
+    fg:          '#111827',
+    fgMuted:     '#6b7280',
+
+    status: {
+        open: '#10b981', in_progress: '#f59e0b',
+        blocked: '#ef4444', closed: '#6b7280'
+    },
+    priority: {
+        0: '#dc2626', 1: '#ef4444', 2: '#f59e0b', 3: '#ca8a04', 4: '#6b7280'
+    },
+    accent: {
+        purple: '#7c3aed', pink: '#db2777', cyan: '#0891b2', green: '#10b981',
+        orange: '#ea580c', red: '#dc2626', yellow: '#ca8a04', gold: '#d97706'
+    },
+    link: {
+        default: '#d1d5db', highlighted: '#7c3aed', gold: '#d97706',
+        goldGlow: 'rgba(217, 119, 6, 0.5)', critical: '#dc2626', cycle: '#db2777'
+    }
+};
+
+function _detectIsDark() {
+    try { return document.documentElement.classList.contains('dark'); }
+    catch (e) { return true; }
+}
+
+// Deep-mutate — keeps nested object identities stable so any code that
+// closed over THEME.status / THEME.accent / etc. still sees the current
+// values. Required because we can't safely reassign THEME (a few inline
+// template literals already captured THEME.* at build time; they'd
+// never see a reassignment, but they DO see in-place property changes
+// when those strings are rebuilt in response to data / UI events).
+function _applyPaletteInPlace(target, src) {
+    target.bg          = src.bg;
+    target.bgSecondary = src.bgSecondary;
+    target.bgTertiary  = src.bgTertiary;
+    target.fg          = src.fg;
+    target.fgMuted     = src.fgMuted;
+    Object.assign(target.status,   src.status);
+    Object.assign(target.priority, src.priority);
+    Object.assign(target.accent,   src.accent);
+    Object.assign(target.link,     src.link);
+}
+
+// THEME is a MUTABLE object — every hot-path canvas callback reads
+// THEME.* at paint time, so property mutations via _applyPaletteInPlace
+// take effect on the next frame.
+const THEME = {
+    bg: darkPalette.bg, bgSecondary: darkPalette.bgSecondary,
+    bgTertiary: darkPalette.bgTertiary, fg: darkPalette.fg,
+    fgMuted: darkPalette.fgMuted,
+    status: { ...darkPalette.status },
+    priority: { ...darkPalette.priority },
+    accent:   { ...darkPalette.accent },
+    link:     { ...darkPalette.link },
+};
+_applyPaletteInPlace(THEME, _detectIsDark() ? darkPalette : lightPalette);
 
 const TYPE_ICONS = {
     bug: '\uD83D\uDC1B',      // 🐛
@@ -478,6 +476,40 @@ function updateConnectedNodes(node) {
 /**
  * Toggle heatmap mode
  */
+/**
+ * NppBeads Phase-7-ish: live theme switch.
+ *
+ * Call from the native side (via window.__nppGraph.applyTheme()) when
+ * the panel's theme toggle flips the `dark` class on <html>. Re-reads
+ * the class, mutates THEME's properties in place so every canvas
+ * render callback sees the new palette on the next frame, and forces
+ * the force-graph canvas backgroundColor to re-apply (since that's a
+ * one-shot setter captured at init time).
+ *
+ * Pass `isDark` explicitly to override detection (useful for testing);
+ * omit to auto-detect from the DOM class.
+ */
+export function applyTheme(isDark) {
+    const dark = (typeof isDark === 'boolean') ? isDark : _detectIsDark();
+    _applyPaletteInPlace(THEME, dark ? darkPalette : lightPalette);
+    // Re-apply the one-shot backgroundColor on the force-graph instance.
+    // Without this, the canvas keeps whatever color it was given at
+    // init (.backgroundColor(THEME.bg) is captured, not live).
+    if (store && store.graph && typeof store.graph.backgroundColor === 'function') {
+        store.graph.backgroundColor(THEME.bg);
+    }
+}
+
+// Surface applyTheme on a well-known global so the native side can
+// drive it via evaluateJavaScript without going through Alpine's
+// $data(). Attached at module load — subsequent calls to this module
+// (e.g. if it gets re-imported) are idempotent.
+if (typeof window !== 'undefined') {
+    window.__nppGraph = Object.assign(window.__nppGraph || {}, {
+        applyTheme,
+    });
+}
+
 export function toggleHeatmap() {
     store.heatmapMode = !store.heatmapMode;
     refreshGraph();

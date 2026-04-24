@@ -776,15 +776,25 @@ static NSString * const kBeadsLastVisitKey = @"NppBeadsLastActivityVisit";
     // localStorage.darkMode. Our own app views read
     // document.documentElement.dataset.theme. Update both in one pass
     // so either surface is correct.
+    //
+    // Phase 7 tweak: graph.js snapshots its color palette at module
+    // load time + force-graph's .backgroundColor(…) is a one-shot
+    // setter. Tell the graph module to live-swap its palette + re-apply
+    // canvas bg so the Graph view flips instantly instead of requiring
+    // a view-away-and-back. Safe no-op on non-Graph views (guarded).
     NSString *js = dark
         ? @"document.documentElement.classList.add('dark');"
            "document.documentElement.dataset.theme = 'dark';"
            "try{localStorage.setItem('darkMode','true');}catch(e){}"
            "if(window.__nppApp)window.__nppApp.setTheme('dark');"
+           "if(window.__nppGraph&&window.__nppGraph.applyTheme)"
+           "window.__nppGraph.applyTheme(true);"
         : @"document.documentElement.classList.remove('dark');"
            "document.documentElement.dataset.theme = 'light';"
            "try{localStorage.setItem('darkMode','false');}catch(e){}"
-           "if(window.__nppApp)window.__nppApp.setTheme('light');";
+           "if(window.__nppApp)window.__nppApp.setTheme('light');"
+           "if(window.__nppGraph&&window.__nppGraph.applyTheme)"
+           "window.__nppGraph.applyTheme(false);";
     [_webView evaluateJavaScript:js completionHandler:nil];
 }
 
