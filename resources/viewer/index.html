@@ -2554,34 +2554,7 @@
     <!-- Full-frame Graph View (outside main for full viewport) -->
     <!-- NppBeads: top offset was 64px (upstream header we removed) — now 0 -->
     <div x-show="view === 'graph'"
-         x-data="{
-           currentPreset: 'default',
-           showControls: true,
-           applyLayoutChoice(choice) {
-             // 'default' is a soft reset: unpin any dragged / precomputed
-             // nodes so the force simulation can re-distribute them, then
-             // run the standard force preset + fit to view. Without the
-             // unpin, node.fx / node.fy stay set (from drag-end or
-             // loadPrecomputedLayout) and the simulation can't move them
-             // back — the visible layout stays stuck.
-             if (choice === 'default') {
-               const g = forceGraphModule?.getGraph?.();
-               const gd = g && typeof g.graphData === 'function' ? g.graphData() : null;
-               if (gd && gd.nodes) {
-                 gd.nodes.forEach(n => { n.fx = null; n.fy = null; });
-               }
-               forceGraphModule?.applyPreset?.('force');
-               graphZoomToFit();
-               return;
-             }
-             // 'grid' in the UI maps to the engine's 'orthogonal' preset
-             // (name mismatch between graph.js's LAYOUT_PRESETS key and
-             // the familiar user-facing label). Pass everything else
-             // through unchanged.
-             const key = (choice === 'grid') ? 'orthogonal' : choice;
-             forceGraphModule?.applyPreset?.(key);
-           }
-         }"
+         x-data="{ currentPreset: 'default', showControls: true }"
          class="fixed inset-0 z-40 bg-gray-50 dark:bg-gray-900"
          style="top: 0;">
 
@@ -2844,10 +2817,31 @@
                  to fit, matching the state the user sees right after
                  Graph view opens. Dividers intentionally omitted per
                  user feedback (keeps the Display panel visually tight).
-                 -->
+                 Logic is inline (not in a separate method) because
+                 Alpine scope-walks parent-scope identifiers only inside
+                 expression directives (x-on / x-bind / etc.), not inside
+                 method bodies in x-data. forceGraphModule + graphZoomToFit
+                 both live on the parent beadsApp root. -->
             <div class="mt-1">
               <select x-model="currentPreset"
-                      @change="applyLayoutChoice(currentPreset)"
+                      @change="
+                        if (currentPreset === 'default') {
+                          const g = forceGraphModule && forceGraphModule.getGraph
+                            ? forceGraphModule.getGraph() : null;
+                          const gd = g && typeof g.graphData === 'function'
+                            ? g.graphData() : null;
+                          if (gd && gd.nodes) {
+                            gd.nodes.forEach(n => { n.fx = null; n.fy = null; });
+                          }
+                          if (forceGraphModule && forceGraphModule.applyPreset)
+                            forceGraphModule.applyPreset('force');
+                          graphZoomToFit();
+                        } else {
+                          const key = (currentPreset === 'grid') ? 'orthogonal' : currentPreset;
+                          if (forceGraphModule && forceGraphModule.applyPreset)
+                            forceGraphModule.applyPreset(key);
+                        }
+                      "
                       class="w-full text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200">
                 <option value="default">Default</option>
                 <option value="force">Force</option>
