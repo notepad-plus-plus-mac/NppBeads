@@ -2870,23 +2870,52 @@ function beadsApp() {
       };
 
       if (this.searchQuery) {
-        // NppBeads: the upstream path uses FTS5 via searchIssues(). Our
-        // synthesized sql-wasm build doesn't include FTS5, so FTS throws
-        // "no such module: fts5". Fall back cleanly to the LIKE-based
-        // queryIssues which already respects filters.search.
+        // NppBeads: two separate FTS failure modes we have to guard:
+        //
+        //   1) FTS module missing → searchIssues / countSearchIssues
+        //      throw, caught below.
+        //   2) FTS module present but returns 0 rows even though the
+        //      substring exists. This happens because FTS5 uses
+        //      word-prefix matching (`term*`) — `dark` matches
+        //      "dark-mode" only if tokenized as one word; substrings
+        //      inside a word don't hit. Also our external-content
+        //      `rebuild` population can leave the index empty on some
+        //      sql-wasm builds.
+        //
+        // Strategy: try FTS first (fast + ranks by relevance when
+        // present), but if it returns nothing, silently re-run through
+        // the LIKE path — queryIssues respects filters.search and
+        // matches anywhere in title / description / id.
+        let ftsRows = [];
+        let ftsCount = 0;
+        let ftsThrew = false;
         try {
-          this.issues = searchIssues(this.searchQuery, {
+          ftsRows = searchIssues(this.searchQuery, {
             mode: this.searchMode,
             preset: this.searchPreset,
             limit: this.pageSize,
             offset,
             filters,
           });
-          this.totalIssues = countSearchIssues(this.searchQuery, filters);
+          ftsCount = countSearchIssues(this.searchQuery, filters);
         } catch (e) {
-          console.warn('[NppBeads] FTS unavailable, using LIKE fallback:', e && e.message);
+          ftsThrew = true;
+          console.warn('[NppBeads] FTS unavailable:', e && e.message);
+        }
+
+        if (ftsThrew || (ftsRows.length === 0 && ftsCount === 0)) {
+          // LIKE fallback. This also covers the FTS-returned-empty-but-
+          // matches-exist case (substring searches, token boundary
+          // mismatches, and the occasional contentless-FTS5 no-op).
           this.issues = queryIssues(filters, this.sort, this.pageSize, offset);
           this.totalIssues = countIssues(filters);
+          console.log('[NppBeads] Issues search: LIKE fallback used for "' +
+            this.searchQuery + '" → ' + this.totalIssues + ' hit(s)');
+        } else {
+          this.issues = ftsRows;
+          this.totalIssues = ftsCount;
+          console.log('[NppBeads] Issues search: FTS used for "' +
+            this.searchQuery + '" → ' + this.totalIssues + ' hit(s)');
         }
       } else {
         this.issues = queryIssues(filters, this.sort, this.pageSize, offset);

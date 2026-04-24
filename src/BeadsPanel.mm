@@ -703,7 +703,13 @@ static NSString * const kBeadsLastVisitKey = @"NppBeadsLastActivityVisit";
     } else {
         return;   // Dashboard/Insights/Graph — search is hidden anyway
     }
-    [_webView evaluateJavaScript:js completionHandler:nil];
+    // Log eval errors so a broken JS path is diagnosable from the
+    // system console — the Issues view search is the one that's most
+    // likely to silently fail (no UI indicator of "nothing happened").
+    [_webView evaluateJavaScript:js completionHandler:^(id r, NSError *e) {
+        if (e) NSLog(@"[NppBeads] _pushSearchQuery(q=\"%@\") err=%@",
+                     q ?: @"", e.localizedDescription);
+    }];
 }
 
 // ─────────────────────────────────────────────────────────────────────────

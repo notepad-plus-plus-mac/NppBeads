@@ -612,16 +612,25 @@
   }
 
   // Called by BeadsPanel._pushSearchQuery when the toolbar search is
-  // typed in while on the Rich Issues view. We force-route to the
-  // LIKE-based queryIssues path (searchQuery stays set, loadIssues
-  // catches any FTS error and falls back — see viewer.js patch).
+  // typed in while on the Rich Issues view. Sets searchQuery on the
+  // Alpine beadsApp root and triggers loadIssues(). Diagnostic log
+  // lets us trace via ctxCopyDiagnostics' __nppConsoleTail whether the
+  // bridge actually reached this function (helpful when Issues search
+  // appears to do nothing).
   window.__nppRichSearch = function (q) {
+    const query = (q || '').trim();
     const app = richApp();
-    if (!app) return false;
-    app.searchQuery = (q || '').trim();
+    if (!app) {
+      NPP.warn('__nppRichSearch called but Alpine root not ready; q="' + query + '"');
+      return false;
+    }
+    NPP.log('__nppRichSearch q="' + query + '" (view=' + (app.view || '?') +
+            ', hasLoad=' + (typeof app.loadIssues === 'function') + ')');
+    app.searchQuery = query;
     app.page = 1;
     if (typeof app.loadIssues === 'function') {
-      try { app.loadIssues(); } catch (e) { NPP.warn('loadIssues failed:', e); }
+      try { app.loadIssues(); }
+      catch (e) { NPP.warn('loadIssues failed:', e && e.message); }
     }
     return true;
   };
