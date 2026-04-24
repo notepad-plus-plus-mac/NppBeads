@@ -2826,16 +2826,22 @@
               <select x-model="currentPreset"
                       @change="
                         if (currentPreset === 'default') {
-                          const g = forceGraphModule && forceGraphModule.getGraph
-                            ? forceGraphModule.getGraph() : null;
-                          const gd = g && typeof g.graphData === 'function'
-                            ? g.graphData() : null;
-                          if (gd && gd.nodes) {
-                            gd.nodes.forEach(n => { n.fx = null; n.fy = null; });
-                          }
-                          if (forceGraphModule && forceGraphModule.applyPreset)
-                            forceGraphModule.applyPreset('force');
-                          graphZoomToFit();
+                          // Route through the same code path that fires
+                          // on every #/graph navigation. initForceGraphView
+                          // calls loadData(issues, deps, null) which
+                          // gives every node a fresh (undefined) x/y and
+                          // null fx/fy — force-graph then places them
+                          // randomly and runs the force simulation from
+                          // scratch. This is what actually produces the
+                          // 'default best view' the user wants; clearing
+                          // fx/fy in-place wasn't enough because the
+                          // nodes retained their previous (x,y) from the
+                          // prior preset's layout.
+                          //
+                          // initForceGraphView() internally handles the
+                          // forceGraphReady guard so subsequent calls
+                          // just re-run loadData + re-start the sim.
+                          initForceGraphView();
                         } else {
                           const key = (currentPreset === 'grid') ? 'orthogonal' : currentPreset;
                           if (forceGraphModule && forceGraphModule.applyPreset)
