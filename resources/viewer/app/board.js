@@ -446,9 +446,14 @@
     descInput.value = b.description || '';
     body.appendChild(wrapField('Description', descInput));
 
-    // Dependencies (read-only for now — add/remove is Phase 3.5)
-    const deps = buildDeps(b);
-    if (deps) body.appendChild(deps);
+    // Dependencies — editable in Phase 3.5. We keep a persistent
+    // container and re-render it after every dep op so the modal
+    // reflects the new state immediately (the Board refresh also fires
+    // via _broadcastDataChanged, but that updates App.beads; the open
+    // modal doesn't re-open on its own).
+    const depContainer = el('div', { class: 'modal-dep-editor' });
+    body.appendChild(depContainer);
+    renderDepEditor(depContainer, b.id);
 
     // Timestamps
     const ts = el('div', { class: 'modal-ts' });
@@ -465,7 +470,7 @@
     }
     body.appendChild(ts);
 
-    // Action bar: status line + close/reopen/claim + cancel/save.
+    // Action bar: status line + close/reopen/claim + delete + cancel/save.
     const actions = el('div', { class: 'modal-actions' });
     const statusLine = el('span', { class: 'form-status' });
     actions.appendChild(statusLine);
@@ -487,6 +492,16 @@
     claimBtn.addEventListener('click', () => doClaim(b, statusLine, claimBtn));
     actions.appendChild(claimBtn);
 
+    // Phase 3.5 — destructive delete, kept last in the secondary row
+    // and styled .btn-danger so it's obviously different from the
+    // non-destructive ones. Confirm dialog lists any issues that
+    // depend on this one (dep-sweep warning).
+    const deleteBtn = el('button', {
+      type: 'button', class: 'btn btn-danger edit-delete',
+    }, 'Delete');
+    deleteBtn.addEventListener('click', () => doDelete(b, statusLine, deleteBtn));
+    actions.appendChild(deleteBtn);
+
     actions.appendChild(el('button', {
       type: 'button', class: 'btn btn-secondary',
       onclick: closeBeadModal,
@@ -495,17 +510,29 @@
     const saveBtn = el('button', {
       type: 'button', class: 'btn btn-primary edit-save',
     }, 'Save');
-    saveBtn.addEventListener('click', () => {
+    saveBtn.addEventListener('click', async () => {
+      const nextAssignee = assigneeInput.value.trim();
+      const origAssignee = (b.assignee || '').trim();
+      // Phase 3.5 — when the user clears a previously-set assignee, the
+      // diffPatch would put assignee="" into the update, but bd treats
+      // empty --assignee as "no change". We detect the clear here and
+      // route it to the dedicated unassignBead bridge instead, BEFORE
+      // the regular update so we don't send a stale assignee in the
+      // same flight. bd serializes writes per-project (the plugin
+      // awaits each call), so ordering is preserved.
+      const clearingAssignee = origAssignee.length > 0 && nextAssignee.length === 0;
       const patch = diffBeadPatch(b, {
         title:       titleInput.value.trim(),
         status:      statusSel.value,
         priority:    parseInt(prioSel.value, 10),
         issueType:   typeSel.value,
-        assignee:    assigneeInput.value.trim(),
+        // Don't include the empty assignee in the patch — unassign
+        // handles it separately below.
+        assignee:    clearingAssignee ? origAssignee : nextAssignee,
         labels:      labelsInput.value.split(',').map(s => s.trim()).filter(Boolean),
         description: descInput.value,
       });
-      if (!patch) {
+      if (!patch && !clearingAssignee) {
         statusLine.textContent = 'no changes';
         statusLine.classList.remove('is-error');
         return;
@@ -519,21 +546,33 @@
         saveBtn.disabled = false;
         return;
       }
-      window.__nppBridge.call('updateBead', Object.assign({ id: b.id }, patch))
-        .then((resp) => {
-          if (resp.ok) {
-            showToast(b.id + ' updated');
-            closeBeadModal();
-          } else {
+      try {
+        if (clearingAssignee) {
+          const r = await window.__nppBridge.call('unassignBead', { id: b.id });
+          if (!r.ok) {
+            statusLine.textContent = r.error || 'unassign failed';
+            statusLine.classList.add('is-error');
+            saveBtn.disabled = false;
+            return;
+          }
+        }
+        if (patch) {
+          const resp = await window.__nppBridge.call('updateBead',
+            Object.assign({ id: b.id }, patch));
+          if (!resp.ok) {
             statusLine.textContent = resp.error || 'update failed';
             statusLine.classList.add('is-error');
             saveBtn.disabled = false;
+            return;
           }
-        }).catch((err) => {
-          statusLine.textContent = (err && err.message) || String(err);
-          statusLine.classList.add('is-error');
-          saveBtn.disabled = false;
-        });
+        }
+        showToast(b.id + ' updated');
+        closeBeadModal();
+      } catch (err) {
+        statusLine.textContent = (err && err.message) || String(err);
+        statusLine.classList.add('is-error');
+        saveBtn.disabled = false;
+      }
     });
     actions.appendChild(saveBtn);
 
@@ -650,6 +689,252 @@
           btn.disabled = false;
         }
       });
+  }
+
+  // Phase 3.5 — permanent delete. Dep-sweep warning lists every issue
+  // that currently depends on this one so the user sees which edges
+  // will go dangling. bd handles the cleanup itself (deletes dangling
+  // dependency rows when the target issue is deleted).
+  function doDelete(bead, statusLine, btn) {
+    if (!window.__nppBridge) {
+      statusLine.textContent = 'bridge unavailable';
+      statusLine.classList.add('is-error');
+      return;
+    }
+    const dependents = App.beads
+      .filter(x => (x.deps || []).some(d =>
+        d.depends_on_id === bead.id && x.id !== bead.id))
+      .map(x => x.id);
+    let prompt = 'Permanently delete ' + bead.id + ' (' +
+                 (bead.title || 'no title').slice(0, 60) + ')?';
+    if (dependents.length) {
+      prompt += '\n\n⚠ ' + dependents.length + ' issue' +
+                (dependents.length === 1 ? '' : 's') +
+                ' depend' + (dependents.length === 1 ? 's' : '') +
+                ' on this: ' + dependents.slice(0, 8).join(', ') +
+                (dependents.length > 8 ? ', …' : '') +
+                '. Their dependency edges will be dropped.';
+    }
+    prompt += '\n\nThis cannot be undone.';
+    if (!confirm(prompt)) return;
+    btn.disabled = true;
+    statusLine.classList.remove('is-error');
+    statusLine.textContent = 'Deleting…';
+    window.__nppBridge.call('deleteBead', { id: bead.id })
+      .then((resp) => {
+        if (resp.ok) {
+          showToast(bead.id + ' deleted');
+          // Optimistic board reconciliation — next _broadcastDataChanged
+          // (triggered natively) will drop the card too, but clearing
+          // optimistic state avoids a flash of the deleted card.
+          optimistic.delete(bead.id);
+          closeBeadModal();
+        } else {
+          statusLine.textContent = resp.error || 'delete failed';
+          statusLine.classList.add('is-error');
+          btn.disabled = false;
+        }
+      }).catch((err) => {
+        statusLine.textContent = (err && err.message) || String(err);
+        statusLine.classList.add('is-error');
+        btn.disabled = false;
+      });
+  }
+
+  // Populate the shared dep-suggest datalist from the current bead list.
+  // Called by both the new-issue modal and the detail-modal dep editor
+  // before they show chip-inputs that reference list="dep-suggest".
+  function refreshDepSuggestions() {
+    const dl = document.getElementById('dep-suggest');
+    if (!dl) return;
+    dl.innerHTML = '';
+    const cap = Math.min(App.beads.length, 500);
+    for (let i = 0; i < cap; i++) {
+      const bd = App.beads[i];
+      const opt = document.createElement('option');
+      opt.value = bd.id;
+      opt.label = bd.title || '';
+      dl.appendChild(opt);
+    }
+  }
+
+  // Phase 3.5 — render / re-render the editable dep section inside the
+  // detail modal. Rebuilds in place after every dep op so the chips
+  // reflect the live bead state without re-opening the modal.
+  function renderDepEditor(container, beadId) {
+    refreshDepSuggestions();
+    container.innerHTML = '';
+    const b = findBead(beadId);
+    if (!b) {
+      container.appendChild(el('p', { class: 'modal-missing' },
+        'Bead not found in current data — refresh to reload.'));
+      return;
+    }
+
+    container.appendChild(el('h4', { class: 'modal-dep-hdr' }, 'Dependencies'));
+    const statusLine = el('span', { class: 'form-status dep-status-line' });
+    container.appendChild(statusLine);
+
+    // Partition existing deps by direction.
+    const blockedBy = [];  // this issue depends on these
+    const blocks    = [];  // these issues depend on this issue
+    for (const d of (b.deps || [])) {
+      const row = {
+        id:    d.depends_on_id || d.issue_id,
+        type:  d.type || 'blocks',
+        dependent:  d.issue_id,
+        dependency: d.depends_on_id,
+      };
+      if (d.issue_id === b.id)      blockedBy.push(row);
+      else if (d.depends_on_id === b.id) blocks.push(row);
+    }
+
+    // Direction: "upstream" means new chips become our blockers
+    //            (depAdd where dependent=us, dependency=chip)
+    //            "downstream" means new chips become our dependents
+    //            (depAdd where dependent=chip, dependency=us)
+    buildDepGroup(container, {
+      label:     'Blocked by',
+      hint:      'upstream — this issue depends on:',
+      existing:  blockedBy,
+      beadId:    b.id,
+      direction: 'upstream',
+      statusLine,
+      onChanged: () => renderDepEditor(container, beadId),
+    });
+    buildDepGroup(container, {
+      label:     'Blocks',
+      hint:      'downstream — these depend on this issue:',
+      existing:  blocks,
+      beadId:    b.id,
+      direction: 'downstream',
+      statusLine,
+      onChanged: () => renderDepEditor(container, beadId),
+    });
+  }
+
+  function buildDepGroup(container, opts) {
+    const wrap = el('div', { class: 'dep-group' });
+    const hdr  = el('div', { class: 'dep-group-hdr' });
+    hdr.appendChild(el('span', { class: 'dep-group-label' }, opts.label));
+    hdr.appendChild(el('span', { class: 'dep-group-hint hint' }, opts.hint));
+    wrap.appendChild(hdr);
+
+    const listRow = el('div', { class: 'dep-chip-list' });
+    if (!opts.existing.length) {
+      listRow.appendChild(el('span', { class: 'dep-empty' }, 'none'));
+    } else {
+      for (const x of opts.existing) listRow.appendChild(
+        buildExistingDepChip(x, opts));
+    }
+    wrap.appendChild(listRow);
+
+    // Add-row: input + type picker
+    const addRow = el('div', { class: 'chip-input-row dep-add-row' });
+    const inp = el('input', {
+      type: 'text',
+      placeholder: 'bd-… ↵',
+      list: 'dep-suggest',
+      autocomplete: 'off',
+    });
+    const typeSel = App.buildDepTypeSelect('blocks');
+    addRow.appendChild(inp);
+    addRow.appendChild(typeSel);
+    wrap.appendChild(addRow);
+
+    async function submitAdd() {
+      const raw = inp.value.trim().replace(/,$/, '');
+      if (!raw) return;
+      if (raw === opts.beadId) {
+        opts.statusLine.textContent = 'An issue cannot depend on itself.';
+        opts.statusLine.classList.add('is-error');
+        return;
+      }
+      const type = typeSel.value || 'blocks';
+      // Direction maps to bd's (dependent, dependency) order.
+      const dependent  = opts.direction === 'upstream' ? opts.beadId : raw;
+      const dependency = opts.direction === 'upstream' ? raw         : opts.beadId;
+      inp.disabled = true; typeSel.disabled = true;
+      opts.statusLine.classList.remove('is-error');
+      opts.statusLine.textContent = 'Adding dep…';
+      try {
+        const r = await window.__nppBridge.call('depAdd',
+          { dependent, dependency, depType: type });
+        if (r.ok) {
+          inp.value = '';
+          opts.statusLine.textContent = '';
+          opts.onChanged();   // re-render container
+        } else {
+          opts.statusLine.textContent = r.error || 'dep add failed';
+          opts.statusLine.classList.add('is-error');
+        }
+      } catch (e) {
+        opts.statusLine.textContent = (e && e.message) || String(e);
+        opts.statusLine.classList.add('is-error');
+      } finally {
+        inp.disabled = false; typeSel.disabled = false;
+      }
+    }
+
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',' || e.key === 'Tab') {
+        e.preventDefault(); submitAdd();
+      }
+    });
+    // change fires when the datalist picks a value without Enter
+    inp.addEventListener('change', submitAdd);
+
+    container.appendChild(wrap);
+  }
+
+  function buildExistingDepChip(d, opts) {
+    const target = findBead(d.id);
+    const chip = el('span', {
+      class: 'chip chip-existing',
+      title: (target ? target.title : d.id) + '  ·  type: ' + d.type,
+      'data-id': d.id,
+      'data-type': d.type,
+    });
+    // Clickable bead id → jump to that bead's modal
+    const link = el('a', {
+      class: 'dep-chip-id',
+      href: '#',
+      onclick: (e) => { e.preventDefault(); openBeadModal(d.id); },
+    }, d.id);
+    chip.appendChild(link);
+    if (d.type !== 'blocks') {
+      const tag = el('span', { class: 'chip-type-tag' }, d.type);
+      chip.appendChild(tag);
+    }
+    const rm = el('button', {
+      type: 'button', class: 'chip-rm',
+      'aria-label': 'Remove ' + d.id,
+    }, '×');
+    rm.addEventListener('click', async () => {
+      rm.disabled = true;
+      opts.statusLine.classList.remove('is-error');
+      opts.statusLine.textContent = 'Removing dep…';
+      try {
+        const r = await window.__nppBridge.call('depRemove', {
+          dependent:  d.dependent,
+          dependency: d.dependency,
+        });
+        if (r.ok) {
+          opts.statusLine.textContent = '';
+          opts.onChanged();
+        } else {
+          opts.statusLine.textContent = r.error || 'dep remove failed';
+          opts.statusLine.classList.add('is-error');
+          rm.disabled = false;
+        }
+      } catch (e) {
+        opts.statusLine.textContent = (e && e.message) || String(e);
+        opts.statusLine.classList.add('is-error');
+        rm.disabled = false;
+      }
+    });
+    chip.appendChild(rm);
+    return chip;
   }
 
   function escCloser(e) { if (e.key === 'Escape') closeBeadModal(); }
@@ -821,42 +1106,56 @@
     const titleEl  = overlay.querySelector('input[name="title"]');
 
     // Dep chip-inputs: one for "Blocked by" (upstream), one for "Blocks"
-    // (downstream). Share a single datalist with all beads so either
-    // field can autocomplete from the same suggestion pool.
-    const depSuggestDL = overlay.querySelector('#dep-suggest');
-    (function populateSuggest() {
-      depSuggestDL.innerHTML = '';
-      const cap = Math.min(App.beads.length, 500);
-      for (let i = 0; i < cap; i++) {
-        const bd = App.beads[i];
-        const opt = document.createElement('option');
-        opt.value = bd.id;
-        opt.label = bd.title || '';
-        depSuggestDL.appendChild(opt);
-      }
-    })();
+    // (downstream). The shared <datalist id="dep-suggest"> lives in the
+    // permanent body (board.html) so the detail-modal dep editor can use
+    // the same autocomplete pool without re-defining it.
+    refreshDepSuggestions();
 
+    // Wires a chip-input region. Returns an object with `values()` that
+    // yields [{id, type}, …] so the caller can build per-chip dep writes.
+    //
+    // If the region has a <span data-role="type-slot"></span> we mount a
+    // dep-type <select> into it — chips created while the select shows
+    // "blocks" record type=blocks, chips created while it shows
+    // "parent-child" record type=parent-child, etc. Chip type is locked
+    // at add time (visible in the chip's little tag suffix).
     function wireChipInput(containerRole) {
       const root = overlay.querySelector('[data-role="' + containerRole + '"]');
       const list = root.querySelector('.chip-list');
       const inp  = root.querySelector('input');
-      const set  = new Set();
+      const slot = root.querySelector('[data-role="type-slot"]');
+      let typeSel = null;
+      if (slot && typeof App.buildDepTypeSelect === 'function') {
+        typeSel = App.buildDepTypeSelect('blocks');
+        slot.appendChild(typeSel);
+      }
+      const entries = new Map();   // id → type
       function addChip(id) {
         id = String(id || '').trim();
-        if (!id || set.has(id)) return;
-        set.add(id);
+        if (!id || entries.has(id)) return;
+        const type = typeSel ? typeSel.value : 'blocks';
+        entries.set(id, type);
         const bead = App.beads.find(b => b.id === id);
         const chip = document.createElement('span');
         chip.className = 'chip';
         chip.dataset.id = id;
-        chip.title = bead ? bead.title : id;
+        chip.dataset.type = type;
+        chip.title = (bead ? bead.title : id) + '  ·  type: ' + type;
         chip.textContent = id;
+        if (type !== 'blocks') {
+          // Visually distinguish non-default types so the user can see
+          // at a glance which chips will create which kind of dep.
+          const tag = document.createElement('span');
+          tag.className = 'chip-type-tag';
+          tag.textContent = type;
+          chip.appendChild(tag);
+        }
         const rm = document.createElement('button');
         rm.type = 'button';
         rm.className = 'chip-rm';
         rm.textContent = '×';
         rm.setAttribute('aria-label', 'Remove ' + id);
-        rm.addEventListener('click', () => { set.delete(id); chip.remove(); });
+        rm.addEventListener('click', () => { entries.delete(id); chip.remove(); });
         chip.appendChild(rm);
         list.appendChild(chip);
       }
@@ -868,7 +1167,7 @@
           const chips = list.querySelectorAll('.chip');
           if (chips.length) {
             const last = chips[chips.length - 1];
-            set.delete(last.dataset.id);
+            entries.delete(last.dataset.id);
             last.remove();
           }
         }
@@ -877,10 +1176,16 @@
         const v = inp.value.trim();
         if (v) { addChip(v); inp.value = ''; }
       });
-      return set;
+      return {
+        values() {
+          const out = [];
+          for (const [id, type] of entries) out.push({ id, type });
+          return out;
+        },
+      };
     }
-    const blockerSet  = wireChipInput('blockers');
-    const blocksSet   = wireChipInput('blocks');
+    const blockerInput = wireChipInput('blockers');
+    const blocksInput  = wireChipInput('blocks');
 
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) closeNewIssueModal();
@@ -918,8 +1223,8 @@
         submit.disabled = false;
         return;
       }
-      const blockerIds = [...blockerSet];   // things blocking the new issue
-      const blocksIds  = [...blocksSet];    // things the new issue blocks
+      const blockerEntries = blockerInput.values();   // blocking the new issue
+      const blocksEntries  = blocksInput.values();    // new issue blocks these
       window.__nppBridge.call('createBead', payload).then(async (resp) => {
         if (!resp.ok) {
           statusEl.textContent = resp.error || 'create failed';
@@ -937,12 +1242,13 @@
         // on concurrent writes within the same project. Each dep is:
         //   Blocked-by chip: newId depends on chipId   (chipId blocks newId)
         //   Blocks      chip: chipId depends on newId  (newId blocks chipId)
-        const totalDeps = blockerIds.length + blocksIds.length;
+        // Each chip now carries its own dep type (Phase 3.5).
+        const totalDeps = blockerEntries.length + blocksEntries.length;
         const failed = [];
-        async function postDep(dependent, dependency) {
+        async function postDep(dependent, dependency, depType) {
           try {
             const r = await window.__nppBridge.call('depAdd', {
-              dependent, dependency, depType: 'blocks',
+              dependent, dependency, depType: depType || 'blocks',
             });
             if (!r.ok) failed.push(dependent + '←' + dependency +
                                    ' (' + (r.error || 'failed') + ')');
@@ -954,8 +1260,8 @@
         if (totalDeps) {
           statusEl.textContent = 'linking ' + totalDeps + ' dep' +
                                  (totalDeps > 1 ? 's' : '') + '…';
-          for (const bid of blockerIds) await postDep(newId, bid);
-          for (const bid of blocksIds)  await postDep(bid, newId);
+          for (const e of blockerEntries) await postDep(newId, e.id, e.type);
+          for (const e of blocksEntries)  await postDep(e.id, newId, e.type);
         }
         if (failed.length) {
           showToast(newId + ' created; some deps failed: ' + failed.join('; '));

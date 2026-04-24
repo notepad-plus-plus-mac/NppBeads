@@ -64,20 +64,25 @@
               <span class="field-label">Blocked by <span class="hint">(upstream deps)</span></span>
               <div class="chip-input" data-role="blockers">
                 <div class="chip-list" data-role="chips"></div>
-                <input type="text" name="blockerInput" list="dep-suggest"
-                       autocomplete="off" placeholder="bd-… ↵">
+                <div class="chip-input-row">
+                  <input type="text" name="blockerInput" list="dep-suggest"
+                         autocomplete="off" placeholder="bd-… ↵">
+                  <span class="chip-input-type" data-role="type-slot"></span>
+                </div>
               </div>
             </label>
             <label class="field">
               <span class="field-label">Blocks <span class="hint">(downstream deps)</span></span>
               <div class="chip-input" data-role="blocks">
                 <div class="chip-list" data-role="chips"></div>
-                <input type="text" name="blocksInput" list="dep-suggest"
-                       autocomplete="off" placeholder="bd-… ↵">
+                <div class="chip-input-row">
+                  <input type="text" name="blocksInput" list="dep-suggest"
+                         autocomplete="off" placeholder="bd-… ↵">
+                  <span class="chip-input-type" data-role="type-slot"></span>
+                </div>
               </div>
             </label>
           </div>
-          <datalist id="dep-suggest"></datalist>
           <label class="field">
             <span class="field-label">Description <span class="hint">(Markdown)</span></span>
             <textarea name="description" rows="5"
@@ -92,6 +97,10 @@
       </div>
     </div>
   </template>
+  <!-- Shared autocomplete pool for all chip-inputs that take a bead id
+       (new-issue modal + detail-modal dep editor). Populated on modal
+       open by refreshDepSuggestions() in board.js. -->
+  <datalist id="dep-suggest"></datalist>
   <div id="board-scroll" class="board-scroll">
     <div id="board" class="board"></div>
   </div>

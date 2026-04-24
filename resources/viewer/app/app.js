@@ -69,6 +69,46 @@
     return parts[parts.length - 1] || sr;
   };
 
+  // ── Dep types ───────────────────────────────────────────────────────
+  // The 10 bd dep types, split by whether they gate status propagation.
+  // Used by the Phase 3.5 dep manager (new-issue + detail-modal) for the
+  // dropdown next to the chip input. `blocks` is the UI default because
+  // it's by far the most common and the one that drives bd ready.
+  App.depTypes = [
+    { value: 'blocks',             label: 'blocks',             group: 'blocking' },
+    { value: 'parent-child',       label: 'parent-child',       group: 'blocking' },
+    { value: 'conditional-blocks', label: 'conditional-blocks', group: 'blocking' },
+    { value: 'waits-for',          label: 'waits-for',          group: 'blocking' },
+    { value: 'related',            label: 'related',            group: 'non-blocking' },
+    { value: 'tracks',             label: 'tracks',             group: 'non-blocking' },
+    { value: 'discovered-from',    label: 'discovered-from',    group: 'non-blocking' },
+    { value: 'caused-by',          label: 'caused-by',          group: 'non-blocking' },
+    { value: 'validates',          label: 'validates',          group: 'non-blocking' },
+    { value: 'supersedes',         label: 'supersedes',         group: 'non-blocking' },
+  ];
+
+  // Build a <select> of the 10 dep types, grouped by blocking/non-blocking.
+  // Used in both the new-issue modal and the detail-modal dep editor.
+  App.buildDepTypeSelect = function (current) {
+    const sel = document.createElement('select');
+    sel.className = 'dep-type-select';
+    const groups = { blocking: 'Blocking', 'non-blocking': 'Non-blocking' };
+    for (const key of Object.keys(groups)) {
+      const og = document.createElement('optgroup');
+      og.label = groups[key];
+      for (const t of App.depTypes) {
+        if (t.group !== key) continue;
+        const o = document.createElement('option');
+        o.value = t.value;
+        o.textContent = t.label;
+        if (t.value === (current || 'blocks')) o.selected = true;
+        og.appendChild(o);
+      }
+      sel.appendChild(og);
+    }
+    return sel;
+  };
+
   function parseJsonl(text) {
     const out = [];
     if (!text) return out;
