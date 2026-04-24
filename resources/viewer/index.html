@@ -2554,7 +2554,34 @@
     <!-- Full-frame Graph View (outside main for full viewport) -->
     <!-- NppBeads: top offset was 64px (upstream header we removed) — now 0 -->
     <div x-show="view === 'graph'"
-         x-data="{ currentPreset: 'default', showControls: true }"
+         x-data="{
+           currentPreset: 'default',
+           showControls: true,
+           applyLayoutChoice(choice) {
+             // 'default' is a soft reset: unpin any dragged / precomputed
+             // nodes so the force simulation can re-distribute them, then
+             // run the standard force preset + fit to view. Without the
+             // unpin, node.fx / node.fy stay set (from drag-end or
+             // loadPrecomputedLayout) and the simulation can't move them
+             // back — the visible layout stays stuck.
+             if (choice === 'default') {
+               const g = forceGraphModule?.getGraph?.();
+               const gd = g && typeof g.graphData === 'function' ? g.graphData() : null;
+               if (gd && gd.nodes) {
+                 gd.nodes.forEach(n => { n.fx = null; n.fy = null; });
+               }
+               forceGraphModule?.applyPreset?.('force');
+               graphZoomToFit();
+               return;
+             }
+             // 'grid' in the UI maps to the engine's 'orthogonal' preset
+             // (name mismatch between graph.js's LAYOUT_PRESETS key and
+             // the familiar user-facing label). Pass everything else
+             // through unchanged.
+             const key = (choice === 'grid') ? 'orthogonal' : choice;
+             forceGraphModule?.applyPreset?.(key);
+           }
+         }"
          class="fixed inset-0 z-40 bg-gray-50 dark:bg-gray-900"
          style="top: 0;">
 
@@ -2813,14 +2840,14 @@
             <!-- NppBeads: layout-preset dropdown (revived from upstream's
                  stripped preset panel). Applies to the force-graph via
                  the module's applyPreset() export. "Default" is a soft
-                 reset — re-applies force layout + zooms to fit, matching
-                 the state the user sees right after Graph view opens. -->
-            <div class="mt-1 pt-1 border-t border-gray-200 dark:border-gray-600">
+                 reset — unpins nodes + re-applies force layout + zooms
+                 to fit, matching the state the user sees right after
+                 Graph view opens. Dividers intentionally omitted per
+                 user feedback (keeps the Display panel visually tight).
+                 -->
+            <div class="mt-1">
               <select x-model="currentPreset"
-                      @change="(currentPreset === 'default')
-                               ? (forceGraphModule?.applyPreset?.('force'),
-                                  graphZoomToFit())
-                               : forceGraphModule?.applyPreset?.(currentPreset)"
+                      @change="applyLayoutChoice(currentPreset)"
                       class="w-full text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200">
                 <option value="default">Default</option>
                 <option value="force">Force</option>
@@ -2833,7 +2860,7 @@
             </div>
 
             <!-- Metric selector + gradient — only meaningful with Heatmap on -->
-            <div class="mt-1 pt-1 border-t border-gray-200 dark:border-gray-600"
+            <div class="mt-1"
                  :class="graphHeatmapActive ? '' : 'opacity-50'">
               <select x-model="graphSizeMetric"
                       @change="setGraphSizeMetric($event.target.value)"
