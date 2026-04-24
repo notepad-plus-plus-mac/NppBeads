@@ -91,6 +91,14 @@ typedef NS_ENUM(NSInteger, BdErrorKind) {
     "NppBeads/<$USER>". Users may want to override for agent attribution. */
 @property (nonatomic, copy) NSString *actor;
 
+/** Phase 3.5 — controls whether `--sandbox` is prepended to every bd
+    call. Default: YES (sandbox on → bd auto-push disabled → ~100× faster
+    writes on projects without working non-interactive git auth, which
+    is the common case). Users with working git auth who actually want
+    dolt auto-sync can set this to NO from the overflow menu — it's
+    persisted per-project in NppBeadsAutoPushProjects defaults. */
+@property (nonatomic, assign) BOOL useSandbox;
+
 - (instancetype)initWithProjectDir:(NSString *)projectDir NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
@@ -171,6 +179,16 @@ typedef NS_ENUM(NSInteger, BdErrorKind) {
 - (void)removeDependencyFromIssue:(NSString *)dependentId
                          toIssue:(NSString *)dependencyId
                       completion:(void (^)(BdResult *res))done;
+
+/** Phase 3.5 — `bd delete <id> --json`. Destructive; caller confirms. */
+- (void)deleteIssue:(NSString *)issueId
+         completion:(void (^)(BdResult *res))done;
+
+/** Phase 3.5 — `bd update <id> --unassign --json`. Separate method rather
+    than a sentinel on updateIssue because bd's --unassign is a flag, not
+    a value for --assignee. */
+- (void)unassignIssue:(NSString *)issueId
+           completion:(void (^)(BdResult *res))done;
 
 // ─────────────────────────────────────────────────────────────────────
 //  Cache control

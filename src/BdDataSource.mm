@@ -145,4 +145,19 @@ static NSError *nserrorFromResult(BdResult *res) {
     }];
 }
 
+- (void)deleteIssue:(NSString *)issueId completion:(void (^)(NSError *))done {
+    [self.runner deleteIssue:issueId completion:^(BdResult *res) {
+        if (done) done(res.ok ? nil : nserrorFromResult(res));
+    }];
+}
+
+- (void)unassignIssue:(NSString *)issueId
+           completion:(void (^)(NSDictionary *, NSError *))done {
+    [self.runner unassignIssue:issueId completion:^(BdResult *res) {
+        if (!res.ok) { if (done) done(nil, nserrorFromResult(res)); return; }
+        NSDictionary *d = [res.json isKindOfClass:[NSDictionary class]] ? res.json : nil;
+        if (done) done(d, nil);
+    }];
+}
+
 @end

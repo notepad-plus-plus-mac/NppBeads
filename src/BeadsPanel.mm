@@ -46,6 +46,12 @@ static NSString *jsStringLiteral(NSString *input) {
 static NSString * const kBeadsRecentProjectsKey = @"NppBeadsRecentProjectRoots";
 static const NSUInteger kBeadsRecentProjectsCap = 10;
 
+// Phase 3.5 — projects where the user has opted INTO bd auto-push.
+// Absence = sandbox ON (default, auto-push disabled). Presence of a
+// project's standardized root = sandbox OFF for that project. Stored as
+// an array because NSSet isn't plist-native.
+static NSString * const kBeadsAutoPushProjectsKey = @"NppBeadsAutoPushProjects";
+
 @implementation BeadsPanel {
     WKWebView          *_webView;
     NSButton           *_projectChip;    // borderless button; click → switcher menu
@@ -514,6 +520,11 @@ static const NSUInteger kBeadsRecentProjectsCap = 10;
     _activeDataSource = _ds;
     if (project.projectRoot.length) {
         _bdRunner = [[BdCommandRunner alloc] initWithProjectDir:project.projectRoot];
+        // Phase 3.5 — honor per-project auto-push opt-in. Default is
+        // useSandbox=YES (sandbox on, auto-push off). If this project's
+        // standardized root is in NppBeadsAutoPushProjects, flip it off
+        // so subsequent bd calls don't pass --sandbox.
+        _bdRunner.useSandbox = ![BeadsPanel _autoPushEnabledForProject:project.projectRoot];
         // Capture the runner locally so a rapid second bindProject: can't
         // make this completion attach to a DIFFERENT runner. If the user
         // flips projects while a probe is in flight, the stale completion
@@ -771,11 +782,31 @@ static const NSUInteger kBeadsRecentProjectsCap = 10;
     add(@"Reveal issues.jsonl in Finder",  @selector(ctxRevealJsonl:));
     add(@"Open .beads/ folder in Finder",  @selector(openBeadsDirInFinder:));
     [m addItem:[NSMenuItem separatorItem]];
+    // Phase 3.5 — per-project auto-push opt-in. Checkmark state is
+    // computed in validateMenuItem: against the currently-bound project.
+    add(@"Enable bd auto-push for this project", @selector(_didToggleAutoPush:));
+    [m addItem:[NSMenuItem separatorItem]];
     add(@"Copy diagnostics to clipboard",  @selector(ctxCopyDiagnostics:));
     add(@"Show raw JSONL head (first 1000 chars)", @selector(ctxShowJsonlHead:));
     [m addItem:[NSMenuItem separatorItem]];
     add(@"Hide panel",                     @selector(ctxHidePanel:));
     return m;
+}
+
+// NSMenuValidation — computes checkmark + enabled state for dynamic
+// items just before the menu is shown. Currently only the auto-push
+// toggle depends on runtime state; other items are always enabled.
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    if (item.action == @selector(_didToggleAutoPush:)) {
+        if (!self.project || self.project.projectRoot.length == 0) {
+            item.state = NSControlStateValueOff;
+            return NO;   // disabled when no project is bound
+        }
+        BOOL on = [BeadsPanel _autoPushEnabledForProject:self.project.projectRoot];
+        item.state = on ? NSControlStateValueOn : NSControlStateValueOff;
+        return YES;
+    }
+    return YES;
 }
 
 // Override so the panel's menu wins over any WKWebView ancestor menu too.
@@ -1127,6 +1158,73 @@ static const NSUInteger kBeadsRecentProjectsCap = 10;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+//  Phase 3.5 — per-project auto-push (anti-sandbox) toggle
+// ─────────────────────────────────────────────────────────────────────────
+
++ (BOOL)_autoPushEnabledForProject:(NSString *)projectRoot {
+    NSString *std = [projectRoot stringByStandardizingPath];
+    if (std.length == 0) return NO;
+    NSArray *arr = [[NSUserDefaults standardUserDefaults]
+                    arrayForKey:kBeadsAutoPushProjectsKey];
+    if (![arr isKindOfClass:[NSArray class]]) return NO;
+    for (id entry in arr) {
+        if (![entry isKindOfClass:[NSString class]]) continue;
+        if ([[(NSString *)entry stringByStandardizingPath] isEqualToString:std]) return YES;
+    }
+    return NO;
+}
+
++ (void)_setAutoPushEnabled:(BOOL)enabled forProject:(NSString *)projectRoot {
+    NSString *std = [projectRoot stringByStandardizingPath];
+    if (std.length == 0) return;
+    NSMutableArray *list =
+        [[[NSUserDefaults standardUserDefaults] arrayForKey:kBeadsAutoPushProjectsKey] mutableCopy];
+    if (!list) list = [NSMutableArray array];
+    // Filter existing entries that equal std (dedupe).
+    NSMutableIndexSet *kill = [NSMutableIndexSet indexSet];
+    [list enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL *stop) {
+        if ([obj isKindOfClass:[NSString class]] &&
+            [[(NSString *)obj stringByStandardizingPath] isEqualToString:std]) {
+            [kill addIndex:idx];
+        }
+    }];
+    [list removeObjectsAtIndexes:kill];
+    if (enabled) [list addObject:std];
+    [[NSUserDefaults standardUserDefaults] setObject:list
+                                              forKey:kBeadsAutoPushProjectsKey];
+}
+
+// Overflow-menu action: flip auto-push for the currently bound project.
+// Updates persistence, the live runner's useSandbox flag, and invalidates
+// the read cache so the next bd call reflects the new mode.
+- (void)_didToggleAutoPush:(NSMenuItem *)sender {
+    if (!self.project || self.project.projectRoot.length == 0) { NSBeep(); return; }
+    BOOL wasEnabled = [BeadsPanel _autoPushEnabledForProject:self.project.projectRoot];
+    BOOL nowEnabled = !wasEnabled;
+    [BeadsPanel _setAutoPushEnabled:nowEnabled forProject:self.project.projectRoot];
+    if (_bdRunner) {
+        _bdRunner.useSandbox = !nowEnabled;
+        [_bdRunner invalidateCache];
+    }
+    NSLog(@"[NppBeads] auto-push %@ for %@",
+          nowEnabled ? @"ENABLED (sandbox OFF)" : @"disabled (sandbox ON — default)",
+          self.project.projectRoot);
+    // Nudge the user about the trade-off the first time they flip it on
+    // for a project. No modal confirmation — toggle is reversible.
+    if (nowEnabled) {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = @"bd auto-push enabled for this project";
+        a.informativeText =
+            @"Every bd write will now attempt a `dolt push` to the git "
+             "remote. If non-interactive git auth isn't set up, writes "
+             "will hang ~23s each. Toggle back off via the same menu if "
+             "writes become slow.";
+        [a addButtonWithTitle:@"OK"];
+        [a runModal];
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 //  Status/title updates
 // ─────────────────────────────────────────────────────────────────────────
 - (void)_refreshTitleBar {
@@ -1233,6 +1331,10 @@ static const NSUInteger kBeadsRecentProjectsCap = 10;
         [self _handleDepAdd:body requestId:body[@"reqId"]];
     } else if ([type isEqualToString:@"depRemove"]) {
         [self _handleDepRemove:body requestId:body[@"reqId"]];
+    } else if ([type isEqualToString:@"deleteBead"]) {
+        [self _handleDeleteBead:body requestId:body[@"reqId"]];
+    } else if ([type isEqualToString:@"unassignBead"]) {
+        [self _handleUnassignBead:body requestId:body[@"reqId"]];
     } else {
         // Unknown message — ignore for forward-compat.
     }
@@ -1424,6 +1526,45 @@ static const NSUInteger kBeadsRecentProjectsCap = 10;
         __strong typeof(self) s = weakSelf;
         if (!s) return;
         [s _resolveRequest:reqId ok:(err == nil) bead:nil error:err];
+        if (!err) [s _broadcastDataChanged];
+    }];
+}
+
+- (void)_handleDeleteBead:(NSDictionary *)body requestId:(NSString *)reqId {
+    NSString *bid = [body[@"id"] isKindOfClass:[NSString class]] ? body[@"id"] : nil;
+    if (!bid.length) {
+        [self _resolveRequest:reqId ok:NO bead:nil
+                        error:[NSError errorWithDomain:BeadsDataSourceErrorDomain
+                                                  code:BeadsDataSourceErrorGeneric
+                                              userInfo:@{NSLocalizedDescriptionKey:@"missing id"}]];
+        return;
+    }
+    NSLog(@"[NppBeads] deleteBead id=%@", bid);
+    __weak typeof(self) weakSelf = self;
+    [_activeDataSource deleteIssue:bid completion:^(NSError *err) {
+        __strong typeof(self) s = weakSelf;
+        if (!s) return;
+        if (err) NSLog(@"[NppBeads] deleteBead %@ FAILED: %@", bid, err.localizedDescription);
+        [s _resolveRequest:reqId ok:(err == nil) bead:nil error:err];
+        if (!err) [s _broadcastDataChanged];
+    }];
+}
+
+- (void)_handleUnassignBead:(NSDictionary *)body requestId:(NSString *)reqId {
+    NSString *bid = [body[@"id"] isKindOfClass:[NSString class]] ? body[@"id"] : nil;
+    if (!bid.length) {
+        [self _resolveRequest:reqId ok:NO bead:nil
+                        error:[NSError errorWithDomain:BeadsDataSourceErrorDomain
+                                                  code:BeadsDataSourceErrorGeneric
+                                              userInfo:@{NSLocalizedDescriptionKey:@"missing id"}]];
+        return;
+    }
+    NSLog(@"[NppBeads] unassignBead id=%@", bid);
+    __weak typeof(self) weakSelf = self;
+    [_activeDataSource unassignIssue:bid completion:^(NSDictionary *bead, NSError *err) {
+        __strong typeof(self) s = weakSelf;
+        if (!s) return;
+        [s _resolveRequest:reqId ok:(err == nil) bead:bead error:err];
         if (!err) [s _broadcastDataChanged];
     }];
 }

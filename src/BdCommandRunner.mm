@@ -253,6 +253,7 @@ static NSArray<NSString *> *collectStderrWarnings(NSString *stderrStr) {
         _cache = [NSMutableDictionary dictionary];
         NSString *user = NSUserName() ?: @"user";
         _actor = [[NSString alloc] initWithFormat:@"NppBeads/%@", user];
+        _useSandbox = YES;   // See BdCommandRunner.h useSandbox for rationale.
     }
     return self;
 }
@@ -286,15 +287,18 @@ static NSArray<NSString *> *collectStderrWarnings(NSString *stderrStr) {
 
     NSTask *task = [[NSTask alloc] init];
     task.launchPath = bd;
-    // Always run with --sandbox: it disables auto-sync (dolt auto-push
-    // to the git remote). Without this flag, every bd read/write hangs
-    // for ~23s on projects where git push auth fails non-interactively
-    // (which is the default state for fresh clones / private repos with
-    // no credential helper). Running local-only is the correct default
-    // for a plugin — users who want replication can `bd sync` from a
-    // terminal. --sandbox is a global flag so it prepends the subcommand.
+    // `--sandbox` disables bd's dolt auto-push. Without it, every bd
+    // read/write hangs for ~23s on projects where git push auth fails
+    // non-interactively (the default state for fresh clones / private
+    // repos with no credential helper). Running local-only is the
+    // correct default for a plugin — users who want replication can
+    // `bd sync` from a terminal.
+    //
+    // Phase 3.5: users who DO have working non-interactive git auth and
+    // want auto-push can flip self.useSandbox = NO per project (wired
+    // from NppBeadsAutoPushProjects defaults in BeadsPanel.bindProject:).
     NSMutableArray *finalArgs = [NSMutableArray arrayWithCapacity:args.count + 1];
-    [finalArgs addObject:@"--sandbox"];
+    if (self.useSandbox) [finalArgs addObject:@"--sandbox"];
     [finalArgs addObjectsFromArray:args];
     task.arguments  = finalArgs;
     task.currentDirectoryURL = [NSURL fileURLWithPath:self.projectDir
@@ -734,6 +738,45 @@ static NSArray<NSString *> *collectStderrWarnings(NSString *stderrStr) {
     [self _runOnIoQueue:^{
         BdResult *r = [self _execute:@[@"dep", @"remove", dependentId, dependencyId,
                                         @"--json"] stdin:nil];
+        if (r.ok) [self invalidateCache];
+        dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(r); });
+    }];
+}
+
+- (void)deleteIssue:(NSString *)issueId completion:(void (^)(BdResult *))done {
+    if (issueId.length == 0) {
+        BdResult *r = [[BdResult alloc] init];
+        r.errorMessage = @"issueId is empty";
+        dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(r); });
+        return;
+    }
+    [self _runOnIoQueue:^{
+        // `bd delete` is irreversible and has no partial-failure mode in
+        // 1.0.2 — either it deletes or it errors. The --force flag skips
+        // the "are you sure?" interactive prompt that terminal bd shows;
+        // we always pass it because our UI already confirmed with the user.
+        BdResult *r = [self _execute:@[@"delete", issueId, @"--force", @"--json"]
+                                stdin:nil];
+        if (r.ok) [self invalidateCache];
+        dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(r); });
+    }];
+}
+
+- (void)unassignIssue:(NSString *)issueId completion:(void (^)(BdResult *))done {
+    if (issueId.length == 0) {
+        BdResult *r = [[BdResult alloc] init];
+        r.errorMessage = @"issueId is empty";
+        dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(r); });
+        return;
+    }
+    [self _runOnIoQueue:^{
+        BdResult *r = [self _execute:@[@"update", issueId, @"--unassign", @"--json"]
+                                stdin:nil];
+        // bd update returns an array — unwrap for UI clarity.
+        if (r.ok && [r.json isKindOfClass:[NSArray class]]) {
+            NSArray *a = (NSArray *)r.json;
+            if (a.count) r.json = a.firstObject;
+        }
         if (r.ok) [self invalidateCache];
         dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(r); });
     }];

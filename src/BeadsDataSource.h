@@ -108,6 +108,16 @@ typedef NS_ENUM(NSInteger, BeadsDataSourceErrorCode) {
                          toIssue:(NSString *)dependencyId
                       completion:(void (^)(NSError * _Nullable error))done;
 
+/** Phase 3.5 — permanent delete. JsonlDataSource returns ReadOnly. */
+- (void)deleteIssue:(NSString *)issueId
+         completion:(void (^)(NSError * _Nullable error))done;
+
+/** Phase 3.5 — clear the assignee (`bd update --unassign`). Distinct from
+    updateIssue with assignee="" because bd treats empty as "no change". */
+- (void)unassignIssue:(NSString *)issueId
+           completion:(void (^)(NSDictionary * _Nullable issue,
+                                NSError * _Nullable error))done;
+
 /** Invalidate any read-cache. Called by the panel's Refresh button. */
 - (void)invalidateCache;
 

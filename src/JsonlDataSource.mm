@@ -164,5 +164,12 @@ static NSError *readOnlyError(void) {
                       completion:(void (^)(NSError *))done {
     dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(readOnlyError()); });
 }
+- (void)deleteIssue:(NSString *)i completion:(void (^)(NSError *))done {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(readOnlyError()); });
+}
+- (void)unassignIssue:(NSString *)i
+           completion:(void (^)(NSDictionary *, NSError *))done {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(nil, readOnlyError()); });
+}
 
 @end
