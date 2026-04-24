@@ -134,24 +134,22 @@ static const NSUInteger kBeadsRecentProjectsCap = 10;
     // Project chip — borderless button that doubles as the project label
     // AND the switcher dropdown trigger (click → menu of recents +
     // Open / Clear). Middle-truncated so long paths still show both ends.
+    //
+    // NOTE: we put the ▾ chevron directly in the title string (not as an
+    // NSImage with imagePosition=NSImageRight) — NSButton with
+    // bordered=NO + SF-Symbol image has had rendering quirks across
+    // macOS versions where the image silently doesn't draw. A glyph in
+    // the title is deterministic, matches the text color automatically,
+    // and doesn't need NSImageSymbolConfiguration plumbing.
     _projectChip = [[NSButton alloc] init];
     _projectChip.translatesAutoresizingMaskIntoConstraints = NO;
-    _projectChip.bezelStyle    = NSBezelStyleInline;
+    _projectChip.bezelStyle    = NSBezelStyleRegularSquare;
     _projectChip.bordered      = NO;
     _projectChip.font          = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
     _projectChip.contentTintColor = [NSColor secondaryLabelColor];
     _projectChip.alignment     = NSTextAlignmentLeft;
-    _projectChip.imagePosition = NSImageRight;
-    _projectChip.imageScaling  = NSImageScaleProportionallyDown;
-    if (@available(macOS 11.0, *)) {
-        NSImage *chev = [NSImage imageWithSystemSymbolName:@"chevron.down"
-                                   accessibilityDescription:@"Switch project"];
-        NSImageSymbolConfiguration *cfg =
-            [NSImageSymbolConfiguration configurationWithPointSize:8
-                                                            weight:NSFontWeightSemibold];
-        _projectChip.image = [chev imageWithSymbolConfiguration:cfg];
-    }
-    _projectChip.title         = @"(no project)";
+    _projectChip.imagePosition = NSNoImage;
+    _projectChip.title         = @"(no project) ▾";
     _projectChip.cell.lineBreakMode = NSLineBreakByTruncatingMiddle;
     _projectChip.cell.controlSize   = NSControlSizeSmall;
     _projectChip.target = self;
@@ -1133,14 +1131,15 @@ static const NSUInteger kBeadsRecentProjectsCap = 10;
 // ─────────────────────────────────────────────────────────────────────────
 - (void)_refreshTitleBar {
     if (self.project) {
-        _projectChip.title    = self.project.projectRoot.lastPathComponent ?: @"(project)";
+        NSString *leaf = self.project.projectRoot.lastPathComponent ?: @"(project)";
+        _projectChip.title    = [leaf stringByAppendingString:@" ▾"];
         _projectChip.toolTip  = self.project.projectRoot;
         _refreshButton.enabled = YES;
         _openDirButton.enabled = YES;
         _viewModePopup.enabled = YES;
         _searchField.enabled   = YES;
     } else {
-        _projectChip.title    = @"(no project)";
+        _projectChip.title    = @"(no project) ▾";
         _projectChip.toolTip  = @"Click to pick a .beads/ project.";
         _refreshButton.enabled = NO;
         _openDirButton.enabled = NO;
