@@ -525,7 +525,9 @@ body { display: flex; flex-direction: column; }
 }
 
 /* Phase 6 — Activity feed view (app/activity.html). Reverse-chron list
-   of recently-touched issues. Clicking an id → Board detail modal. */
+   of recently-touched issues. Each row expands on hover to show a
+   preview (description + extra metadata); a dedicated "Open" button is
+   the only click-to-jump path into the Board detail modal. */
 .activity-hdr {
   display: flex;
   align-items: baseline;
@@ -533,9 +535,7 @@ body { display: flex; flex-direction: column; }
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
-  position: sticky;
-  top: 0;
-  z-index: 1;
+  flex: 0 0 auto;   /* header height fixed; list takes the rest */
 }
 .activity-title {
   font-size: 12px;
@@ -546,9 +546,17 @@ body { display: flex; flex-direction: column; }
   font-size: 11px;
   color: var(--text-muted);
 }
+/* Scrolling container — flex-1 inside body's flex column so the panel's
+   webview-height drives the visible area. `min-height: 0` is the
+   flexbox trick required for overflow to actually kick in; without it
+   the child would refuse to shrink below its intrinsic content height.
+*/
 .activity-list {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 4px 0;
 }
 .activity-empty {
@@ -559,23 +567,27 @@ body { display: flex; flex-direction: column; }
   text-align: center;
 }
 .activity-row {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+  transition: background 80ms ease-in;
+}
+.activity-row:hover { background: var(--bg-elev); }
+.activity-row-main {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 10px;
   padding: 8px 14px;
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
 }
-.activity-row:hover { background: var(--bg-elev); }
 .activity-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
   color: var(--accent, #2563eb);
   text-decoration: none;
   white-space: nowrap;
+  user-select: text;    /* let the user copy the id */
 }
-.activity-id:hover { text-decoration: underline; }
 .activity-title-cell {
   font-size: 12px;
   color: var(--text);
@@ -603,6 +615,70 @@ body { display: flex; flex-direction: column; }
   font-size: 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: nowrap;
+}
+.activity-open-btn {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--accent, #2563eb);
+  background: transparent;
+  color: var(--accent, #2563eb);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 500;
+  opacity: 0;                            /* only visible on row hover */
+  transition: opacity 80ms ease-in;
+}
+.activity-row:hover .activity-open-btn,
+.activity-open-btn:focus-visible { opacity: 1; }
+.activity-open-btn:hover {
+  background: var(--accent, #2563eb);
+  color: #fff;
+}
+/* Preview — collapsed by default, expanded on row hover. Content is
+   rendered up-front by JS so there's no fetch-on-hover latency. */
+.activity-preview {
+  display: none;
+  padding: 0 14px 10px 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.activity-row:hover .activity-preview { display: block; }
+.activity-preview-body {
+  margin: 0 0 6px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  max-height: 80px;
+  overflow: hidden;
+  position: relative;
+}
+.activity-preview-body.is-truncated::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 20px;
+  background: linear-gradient(transparent, var(--bg-elev));
+  pointer-events: none;
+}
+.activity-preview-empty {
+  font-style: italic;
+  color: var(--text-fade, #9ca3af);
+  margin: 0 0 6px 0;
+}
+.activity-preview-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.activity-preview-facts .fact-key {
+  color: var(--text-fade, #9ca3af);
+}
+.activity-preview-facts .fact-val {
+  color: var(--text);
 }
 .board-scroll {
   flex: 1;
