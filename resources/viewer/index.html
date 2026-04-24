@@ -163,12 +163,12 @@
     .dark .status-blocked { background-color: #7f1d1d; color: #fecaca; }
     .dark .status-closed { background-color: #14532d; color: #bbf7d0; }
 
-    /* Priority indicators - raw CSS fallback */
-    .priority-0 { border-left: 4px solid #ef4444; }
-    .priority-1 { border-left: 4px solid #f97316; }
-    .priority-2 { border-left: 4px solid #3b82f6; }
-    .priority-3 { border-left: 4px solid #9ca3af; }
-    .priority-4 { border-left: 4px solid #d1d5db; }
+    /* NppBeads: priority left-border removed — the gray bar for P3/P4
+       added visual noise without signal, and a red bar on P0 is already
+       communicated by the inline priority pill (see issue row markup).
+       If you want the colored accent strip back for any reason, restore
+       these five rules AND re-add :class="'priority-' + issue.priority"
+       on the row `<div>`. */
 
     /* Filter panel: always show on md+ screens */
     @media (min-width: 768px) {
@@ -860,7 +860,6 @@
           <div class="divide-y divide-gray-200 dark:divide-gray-700">
             <template x-for="issue in issues" :key="issue.id">
               <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-all duration-150 group active:bg-gray-100 dark:active:bg-gray-600 hover:pl-5"
-                   :class="'priority-' + issue.priority"
                    @click="showIssue(issue.id)"
                    role="button"
                    tabindex="0"
@@ -874,6 +873,20 @@
                     <div class="flex flex-wrap items-center gap-1.5 sm:gap-2">
                       <span class="text-xs font-mono text-gray-500 dark:text-gray-400" x-text="issue.id"></span>
                       <span class="px-2 py-0.5 text-xs font-medium rounded bg-gray-100 dark:bg-gray-700" x-text="issue.issue_type"></span>
+                      <!-- NppBeads: priority pill. Replaces the removed
+                           border-left priority bar — same signal,
+                           inline with the other badges. Only rendered
+                           when priority is a recognized 0-4 value. -->
+                      <span x-show="issue.priority !== null && issue.priority !== undefined && issue.priority >= 0 && issue.priority <= 4"
+                            class="px-2 py-0.5 text-xs font-medium rounded"
+                            :class="{
+                              'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300': issue.priority === 0,
+                              'bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300': issue.priority === 1,
+                              'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300': issue.priority === 2,
+                              'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300': issue.priority === 3,
+                              'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-500': issue.priority === 4
+                            }"
+                            x-text="'P' + issue.priority"></span>
                       <span x-show="isOnCriticalPath(issue.id)"
                             class="px-2 py-0.5 text-xs font-medium rounded bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 animate-pulse">
                         🔥 Critical #<span x-text="getCriticalPathPosition(issue.id)"></span>
