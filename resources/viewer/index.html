@@ -854,8 +854,9 @@
           </div>
         </div>
 
-        <!-- Issues list -->
-        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+        <!-- Issues list — NppBeads: border removed per user request; only
+             the inner `divide-y` (horizontal lines between rows) remains. -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm">
           <div class="divide-y divide-gray-200 dark:divide-gray-700">
             <template x-for="issue in issues" :key="issue.id">
               <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-all duration-150 group active:bg-gray-100 dark:active:bg-gray-600 hover:pl-5"
