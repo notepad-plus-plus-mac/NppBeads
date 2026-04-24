@@ -2554,7 +2554,7 @@
     <!-- Full-frame Graph View (outside main for full viewport) -->
     <!-- NppBeads: top offset was 64px (upstream header we removed) — now 0 -->
     <div x-show="view === 'graph'"
-         x-data="{ currentPreset: 'force', showControls: true }"
+         x-data="{ currentPreset: 'default', showControls: true }"
          class="fixed inset-0 z-40 bg-gray-50 dark:bg-gray-900"
          style="top: 0;">
 
@@ -2809,6 +2809,28 @@
                      :checked="graphShowParticles"
                      @change="toggleGraphParticles()">
             </label>
+
+            <!-- NppBeads: layout-preset dropdown (revived from upstream's
+                 stripped preset panel). Applies to the force-graph via
+                 the module's applyPreset() export. "Default" is a soft
+                 reset — re-applies force layout + zooms to fit, matching
+                 the state the user sees right after Graph view opens. -->
+            <div class="mt-1 pt-1 border-t border-gray-200 dark:border-gray-600">
+              <select x-model="currentPreset"
+                      @change="(currentPreset === 'default')
+                               ? (forceGraphModule?.applyPreset?.('force'),
+                                  graphZoomToFit())
+                               : forceGraphModule?.applyPreset?.(currentPreset)"
+                      class="w-full text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200">
+                <option value="default">Default</option>
+                <option value="force">Force</option>
+                <option value="compact">Compact</option>
+                <option value="spread">Spread</option>
+                <option value="grid">Grid</option>
+                <option value="radial">Radial</option>
+                <option value="cluster">Cluster</option>
+              </select>
+            </div>
 
             <!-- Metric selector + gradient — only meaningful with Heatmap on -->
             <div class="mt-1 pt-1 border-t border-gray-200 dark:border-gray-600"
