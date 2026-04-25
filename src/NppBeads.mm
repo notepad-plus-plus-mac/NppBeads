@@ -179,6 +179,29 @@ static void notePathActivated() {
 static void rescanProjectFromCurrentBuffer() {
     if (!sPanel) return;
     std::string path = currentFullPath();
+
+    // Defence-in-depth against a reproducible crash: when the user opens a
+    // `.beads/` internal file directly (most commonly the project's
+    // issues.jsonl, which on large repos runs into the 10+ MB / thousands-
+    // of-issues range), DO NOT treat that as "switch the panel to this
+    // project". The auto-rebind path here is expensive — probe, poll
+    // reinit, 11 MB JSONL escape-and-inject via jsStringLiteral, WKWebView
+    // reload, sql.js rebuild — and when it races the SCN_PAINTED /
+    // SCN_UPDATEUI storm that scrolling a multi-MB file generates across
+    // every loaded plugin, something downstream throws (ViewBridge
+    // collapse, plugin-side NSException) and abort()s the host from
+    // NSApplication.run. Five crash reproductions with the same signature.
+    //
+    // The user already has a switcher menu item for "I want to look at
+    // this project" — auto-binding on a raw data-file click is the wrong
+    // affordance anyway. Matching the indicator-skip heuristic keeps this
+    // simple: if the buffer path contains `/.beads/`, we leave the panel's
+    // current binding alone. Normal code files (any path outside any
+    // project's .beads/) still auto-rebind exactly as before.
+    if (!path.empty() && path.find("/.beads/") != std::string::npos) {
+        return;
+    }
+
     NSString *nsPath = path.empty() ? nil : [NSString stringWithUTF8String:path.c_str()];
     BeadsProject *proj = [BeadsProjectScanner findProjectFromPath:nsPath];
 
