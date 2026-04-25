@@ -529,6 +529,40 @@ static const CGFloat kBeadsZoomStep    = 0.10;
 //  Public API
 // ─────────────────────────────────────────────────────────────────────────
 - (void)bindProject:(BeadsProject *)project {
+    // Crash-mitigation: detect a no-op rebind (same .beads/ directory)
+    // and short-circuit BEFORE tearing anything down. Even three full
+    // rebinds in a row on the same project cause three [_webView reload]
+    // cycles, which on macOS 15.x are documented (see EditorView.mm's
+    // SCN_MODIFIED forwarding comment) to destabilize the TextInputUI
+    // /CursorUI ViewBridge: the cursor-overlay view loses its anchor
+    // during one of the WebKit teardown/setup cycles, then AppKit
+    // throws on the next view-tree walk and NSApplication.run rethrows
+    // out to abort(). We've reproduced this signature three times.
+    //
+    // Cheap pointer-equal-on-jsonlPath check; covers the common case
+    // (same project re-supplied by switcher / rescan / probe-redo)
+    // without changing semantics for genuine project transitions or
+    // for bindProject:nil.
+    if (project && self.project &&
+        project.beadsDir.length && self.project.beadsDir.length &&
+        [project.beadsDir isEqualToString:self.project.beadsDir]) {
+        NSLog(@"[NppBeads] bindProject: same project (%@) — refresh only, "
+              @"no webview reload",
+              project.projectRoot.lastPathComponent ?: @"?");
+        // Make sure the chip / status / MRU still reflect any subtle
+        // metadata change in the new BeadsProject instance, but don't
+        // tear down the webview.
+        self.project = project;
+        [_ds bindToPath:project.jsonlPath];
+        [_watcher watchPath:project.jsonlPath];
+        if (project.projectRoot.length) {
+            [BeadsPanel _recordRecentProjectRoot:project.projectRoot];
+        }
+        [self _refreshTitleBar];
+        [self _refreshStatusBar];
+        return;
+    }
+
     // Tear down any previous-project live-sync poll BEFORE changing state.
     // BeadsPoll's -stop bumps its generation counter so any in-flight bd
     // completion for the old project becomes a no-op.
@@ -1929,17 +1963,50 @@ static const CGFloat kBeadsZoomStep    = 0.10;
 // the view to Dashboard + clears the search so re-opening feels fresh
 // rather than resuming whatever weird state the user last left behind.
 - (void)prepareForShow {
+    BeadsViewMode oldMode = _viewMode;
     _viewMode = BeadsViewModeDashboard;
     [_viewModePopup selectItemWithTag:_viewMode];
     _searchField.stringValue = @"";
     _lastSearchQuery = @"";
     [self _refreshTitleBar];
-    // Full reload so Alpine re-inits and any transient overlay (graph
-    // detail panel, issue modal) is definitely gone.
+
+    // Crash-mitigation: skip the full webview reload when we're
+    // already loaded on the dashboard URL. Fresh loadRequest yanks
+    // WebKit's view tree which has been documented in the host's
+    // EditorView.mm SCN_MODIFIED comment to destabilize TextInputUI's
+    // CursorUIViewService, with stale views surviving long enough to
+    // trip an exception on the next AppKit view-tree walk. Three
+    // confirmed crashes followed this pattern.
+    //
+    // If we're already on Dashboard with the viewer loaded, just push
+    // a clear-transient-state JS poke (the same one viewDidMoveToWindow
+    // uses) and return. If we're on a different view mode (Issues /
+    // Graph / Board / Activity), navigate to Dashboard via a
+    // hash-only fragment change which doesn't tear down the page.
+    NSURL *targetURL = [self _urlForViewMode:_viewMode];
+    NSURL *currentURL = _webView.URL;
+    if (_viewerLoaded && currentURL) {
+        NSString *currentPath = currentURL.path ?: @"";
+        NSString *targetPath  = targetURL.path  ?: @"";
+        // Same page (typically index.html) — drive routing via hash.
+        if ([currentPath isEqualToString:targetPath]) {
+            [_webView evaluateJavaScript:
+                @"if (typeof window.__nppClearTransientState === 'function') {"
+                 "  window.__nppClearTransientState();"
+                 "}"
+                 "if (location.hash !== '#/') location.hash = '/';"
+                completionHandler:nil];
+            return;
+        }
+        // Different page (Board → Dashboard, Activity → Dashboard).
+        // Still need a real navigation but at least we've collapsed
+        // the same-page case which is the common one when re-toggling
+        // visibility without changing the view mode in between.
+    }
+    (void)oldMode;
     _viewerLoaded = NO;
     [self _installJsonlUserScript];
-    [_webView loadRequest:[NSURLRequest requestWithURL:
-        [self _urlForViewMode:_viewMode]]];
+    [_webView loadRequest:[NSURLRequest requestWithURL:targetURL]];
 }
 
 // KVO: webView.URL changed. Map it back to a BeadsViewMode and update
