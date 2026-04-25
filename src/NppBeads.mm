@@ -262,6 +262,35 @@ static void cmdOpenDir() {
 //  Phase 5 — editor integration helpers
 // ─────────────────────────────────────────────────────────────────────────
 
+// Should the BeadIdIndicator scan the currently-active editor buffer?
+//
+// Skip when the buffer is itself a Beads-internal file. Two reasons:
+//   1. issues.jsonl contains literal `bd-XXX` strings on every line as
+//      part of its data; coloring all of them is visual noise (the
+//      whole file IS bead data, not references TO beads), and on a
+//      large file (340+ KB observed) it can produce thousands of
+//      indicator paints per scan.
+//   2. SCI_INDICATORFILLRANGE causes Scintilla to fire SCN_MODIFIED
+//      with SC_MOD_CHANGEINDICATOR which the host forwards to all
+//      plugins. On big files this generates a sustained storm of
+//      cross-plugin notifications which may agitate other plugins
+//      into raising NSException (we've seen two crashes with this
+//      exact reproduction — JSONL inside .beads/ open + browsed +
+//      panel active).
+//
+// Match path == bound project's jsonl exactly OR any path containing
+// "/.beads/" anywhere (covers any unbound project's data files too).
+static BOOL shouldRunIndicatorOnCurrentBuffer() {
+    std::string path = currentFullPath();
+    if (path.empty()) return YES;
+    if (path.find("/.beads/") != std::string::npos) return NO;
+    if (sCurrentProject && sCurrentProject.jsonlPath.length) {
+        const char *jsonlC = [sCurrentProject.jsonlPath fileSystemRepresentation];
+        if (jsonlC && path == jsonlC) return NO;
+    }
+    return YES;
+}
+
 // Resolve the scintilla handle that corresponds to the currently-focused
 // editor view. NPPM_GETCURRENTSCINTILLA returns 0 (main) or 1 (sub).
 static uintptr_t currentScintillaHandle() {
@@ -479,9 +508,18 @@ extern "C" NPP_EXPORT void beNotified(SCNotification *n) {
             if (sPanelVisible) rescanProjectFromCurrentBuffer();
             // Phase 5 — retarget the indicator at the now-active editor
             // and repaint. Also fires when the user splits a view.
+            // Skip the rescan when the new buffer is a .beads/ internal
+            // file (see shouldRunIndicatorOnCurrentBuffer for why) but
+            // still update the handle so subsequent buffer switches
+            // back to a code file work without a stale handle.
             if (sIndicator) {
                 sIndicator.scintillaHandle = currentScintillaHandle();
-                [sIndicator rescanNow];
+                if (shouldRunIndicatorOnCurrentBuffer()) {
+                    [sIndicator rescanNow];
+                } else {
+                    NSLog(@"[NppBeads] indicator paused — current buffer is "
+                          @"a .beads/ internal file");
+                }
             }
             break;
         // Phase 5 — forwarded Scintilla notifications. BeadIdIndicator
@@ -494,7 +532,8 @@ extern "C" NPP_EXPORT void beNotified(SCNotification *n) {
         case SCN_MODIFIED:
         case SCN_UPDATEUI:
         case SCN_PAINTED:
-            if (sIndicator && sIndicator.scintillaHandle != 0) {
+            if (sIndicator && sIndicator.scintillaHandle != 0 &&
+                shouldRunIndicatorOnCurrentBuffer()) {
                 [sIndicator scheduleRescan];
             }
             break;

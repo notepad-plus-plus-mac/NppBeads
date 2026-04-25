@@ -91,7 +91,24 @@ static const int kBeadLinkColor = 0xEB6325;
         __strong typeof(self) s = weakSelf;
         if (!s) return;
         s->_rescanPending = NO;
-        [s rescanNow];
+        // Wrap in @try @catch so any NSException raised inside the
+        // scan path (Scintilla send-message reentrancy, downstream
+        // plugin reactions, NSMutableData edge cases, etc.) gets
+        // logged instead of escaping the dispatched block. An
+        // exception that escapes a dispatch_after block bypasses
+        // every @try in the host's plugin manager and propagates up
+        // to NSApplication.run, which on this build calls abort()
+        // (two confirmed crashes with this exact stack trace —
+        // SIGABRT via objc_exception_rethrow on the main thread —
+        // when a JSONL file inside .beads/ is browsed while the
+        // panel is open).
+        @try {
+            [s rescanNow];
+        } @catch (NSException *e) {
+            NSLog(@"[NppBeads] BeadIdIndicator.rescanNow trapped NSException: "
+                  @"name=%@ reason=%@ userInfo=%@",
+                  e.name, e.reason, e.userInfo);
+        }
     });
 }
 
