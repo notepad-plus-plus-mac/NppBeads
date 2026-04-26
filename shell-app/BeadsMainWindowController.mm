@@ -60,18 +60,15 @@ static const CGFloat kMinWindowH     = 400.0;
     _beadsPanel = [[BeadsPanel alloc] initWithFrame:b
                                        resourcesDir:res];
     _beadsPanel.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    self.window.contentView = _beadsPanel;
 
-    // The plugin uses hideHandler to fold the side panel back into NPP.
-    // In the standalone, the natural mapping is "close the window" — but
-    // closing the only window quits the app (per our
-    // applicationShouldTerminateAfterLastWindowClosed: = YES). User can
-    // still hide the app via Cmd-H without quitting. Wire up close so the
-    // panel's "Hide panel" context-menu item is meaningful.
-    __weak NSWindow *w = self.window;
-    _beadsPanel.hideHandler = ^{
-        [w performClose:nil];
-    };
+    // The standalone IS the window's only content. "Hide panel" doesn't
+    // make sense here — there's nothing to dock back into. Suppress the
+    // ⋯ menu item; users dismiss via ⌘W / red traffic light, which is
+    // the natural Mac convention. (We also intentionally don't set
+    // hideHandler since no caller in the standalone path will fire it.)
+    _beadsPanel.showsHidePanelMenuItem = NO;
+
+    self.window.contentView = _beadsPanel;
 }
 
 - (void)bindProject:(nullable BeadsProject *)project {

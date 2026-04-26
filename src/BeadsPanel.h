@@ -60,6 +60,17 @@ typedef NS_ENUM(NSInteger, BeadsThemePref) {
 // the dock/float state, so the panel just asks it to hide.
 @property (nonatomic, copy, nullable) void (^hideHandler)(void);
 
+// Whether the "Hide panel" item appears in the overflow / context
+// menu. Default YES (plugin shell — the docked panel must be
+// dismissable from inside it). The standalone app shell sets this to
+// NO since the panel IS the window's only content; "hiding" it would
+// leave a blank window. Standalone users dismiss via ⌘W / the red
+// traffic light, which is the natural Mac convention.
+//
+// Setting this rebuilds the panel's context menu in place; no need
+// to retain any reference to the prior menu.
+@property (nonatomic, assign) BOOL showsHidePanelMenuItem;
+
 - (instancetype)initWithFrame:(NSRect)frame
                  resourcesDir:(NSString *)resourcesDir NS_DESIGNATED_INITIALIZER;
 - (instancetype)initWithFrame:(NSRect)frame NS_UNAVAILABLE;

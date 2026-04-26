@@ -120,6 +120,9 @@ static const CGFloat kBeadsZoomStep    = 0.10;
     _ds      = [[JsonlDataSource alloc] init];
     _watcher = [[BeadsWatcher alloc] init];
     _seenFilePaths = [NSMutableSet setWithCapacity:32];
+    // Default ON — matches the long-standing plugin behavior. The
+    // standalone shell flips it OFF after init.
+    _showsHidePanelMenuItem = YES;
 
     __weak typeof(self) weakSelf = self;
     _watcher.onChange = ^{
@@ -918,9 +921,19 @@ static const CGFloat kBeadsZoomStep    = 0.10;
     [m addItem:[NSMenuItem separatorItem]];
     add(@"Copy diagnostics to clipboard",  @selector(ctxCopyDiagnostics:));
     add(@"Show raw JSONL head (first 1000 chars)", @selector(ctxShowJsonlHead:));
-    [m addItem:[NSMenuItem separatorItem]];
-    add(@"Hide panel",                     @selector(ctxHidePanel:));
+    if (_showsHidePanelMenuItem) {
+        [m addItem:[NSMenuItem separatorItem]];
+        add(@"Hide panel",                 @selector(ctxHidePanel:));
+    }
     return m;
+}
+
+// Setter: rebuild the menu in place so a runtime change is reflected
+// in the next ⋯ tap or right-click. No-op when the value is unchanged.
+- (void)setShowsHidePanelMenuItem:(BOOL)v {
+    if (_showsHidePanelMenuItem == v) return;
+    _showsHidePanelMenuItem = v;
+    self.menu = [self _buildContextMenu];
 }
 
 // NSMenuValidation — computes checkmark + enabled state for dynamic
