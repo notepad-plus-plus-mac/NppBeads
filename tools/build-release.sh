@@ -85,6 +85,13 @@ cmake --build . --target Beads --config Release -- -j"$(sysctl -n hw.ncpu)"
 
 [ -d "$APP_BUNDLE" ] || err "Build did not produce $APP_BUNDLE"
 
+# Strip debug symbols and any local symbol-table entries from the binary.
+# `-x` keeps only globally-exported symbols (which AppKit needs for ObjC
+# class lookup). The Release compile already passed -Os and the link
+# already passed -dead_strip; this is the last layer of size reduction.
+log "Stripping debug + local symbols"
+strip -x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+
 # ── 2. Codesign the app ──────────────────────────────────────────────────────
 
 log "Code-signing $APP_NAME.app with hardened runtime"

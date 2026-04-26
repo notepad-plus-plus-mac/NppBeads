@@ -130,7 +130,17 @@ if(NPPBEADS_BUILD_APP)
         "-framework UniformTypeIdentifiers")
     target_compile_options(Beads PRIVATE
         -Wall -Wno-unused-parameter
+        # Release-only: optimize for size and let visibility=hidden
+        # drop unexported symbols so the linker can dead-strip more.
+        $<$<CONFIG:Release>:-Os>
+        $<$<CONFIG:Release>:-fvisibility=hidden>
         $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    target_link_options(Beads PRIVATE
+        # Dead-strip unreferenced code. With -fvisibility=hidden on
+        # the compile side, the linker can prove far more code is
+        # unreachable. Combined with strip -x in tools/build-release.sh
+        # this trims the universal binary by ~20-30%.
+        $<$<CONFIG:Release>:-Wl,-dead_strip>)
 
     set_target_properties(Beads PROPERTIES
         OUTPUT_NAME "Beads"

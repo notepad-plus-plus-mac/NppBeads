@@ -16,11 +16,21 @@ static const CGFloat kMinWindowH     = 400.0;
 
 - (instancetype)init {
     NSRect contentRect = NSMakeRect(0, 0, kDefaultWindowW, kDefaultWindowH);
+    // Standard title bar style. We deliberately do NOT use
+    // NSWindowStyleMaskFullSizeContentView here: the BeadsPanel's
+    // own 28pt toolbar (project chip / view popup / search /
+    // theme / refresh / finder / overflow) lives at the TOP of its
+    // content view and is exactly the same height as the macOS
+    // title bar. With FullSizeContentView the macOS title bar
+    // floats over the panel toolbar and hides it — leading to the
+    // appearance that the standalone "lacks" the toolbar. Without
+    // it, the macOS title bar sits at the top with traffic lights
+    // and the project name, and the panel toolbar appears
+    // immediately below it. Two distinct bars, both fully visible.
     NSUInteger styleMask = NSWindowStyleMaskTitled
                          | NSWindowStyleMaskClosable
                          | NSWindowStyleMaskMiniaturizable
-                         | NSWindowStyleMaskResizable
-                         | NSWindowStyleMaskFullSizeContentView;
+                         | NSWindowStyleMaskResizable;
     NSWindow *window = [[NSWindow alloc] initWithContentRect:contentRect
                                                    styleMask:styleMask
                                                      backing:NSBackingStoreBuffered
@@ -28,7 +38,6 @@ static const CGFloat kMinWindowH     = 400.0;
     window.title           = @"Beads";
     window.releasedWhenClosed = NO;
     window.minSize         = NSMakeSize(kMinWindowW, kMinWindowH);
-    window.titlebarAppearsTransparent = NO;
 
     if ((self = [super initWithWindow:window])) {
         // Autosave AFTER we've called super's designated initializer so the
