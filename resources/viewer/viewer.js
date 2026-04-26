@@ -1610,6 +1610,111 @@ function getIssuesBySlack(limit = 10, showZeroSlack = true) {
 }
 
 /**
+ * Synthesize the `project_health` payload that the Insights view's
+ * Project Velocity + Graph Health panels bind to.
+ *
+ * The upstream beads_viewer ships a `data/triage.json` written by its
+ * Rust/Go export step, including a `project_health` object. NppBeads
+ * runs the same HTML inside a WKWebView but computes everything live
+ * from JSONL + WASM graph metrics, so we synthesize the same shape
+ * here. `viewer.js`'s init calls us only when the fetched triage.json
+ * (if any) didn't already provide one — keeps both deployment modes
+ * working.
+ *
+ * Returns:
+ *   {
+ *     velocity: {
+ *       closed_last_7_days, closed_last_30_days,
+ *       avg_days_to_close, weekly: [{ closed: N }, ...]
+ *     },
+ *     graph: {
+ *       node_count, edge_count, density,
+ *       has_cycles, cycle_count, phase2_ready
+ *     }
+ *   }
+ *
+ * Tolerant of malformed dates and empty datasets — division by zero
+ * and NaN results are clamped to 0 / false.
+ */
+function computeProjectHealth(issues, dependencies, cycleInfo, graphReady) {
+  const now = Date.now();
+  const dayMs  = 24 * 60 * 60 * 1000;
+  const weekMs = 7 * dayMs;
+
+  // ── Velocity ─────────────────────────────────────────────────────
+  // We rely on `updated_at` as the close timestamp because the JSONL
+  // schema doesn't carry a separate `closed_at`. The bd CLI bumps
+  // updated_at on every status transition, so for an issue currently
+  // in `status=closed` it's the time of the closing transition (or
+  // a later edit, which is fine — close events dominate updates on
+  // closed issues in practice).
+  let closed7  = 0;
+  let closed30 = 0;
+  let totalDeltaMs = 0;
+  let closedWithDates = 0;
+
+  // Eight weekly buckets, oldest → newest (matches the slice(-8) the
+  // HTML's mini-chart applies before rendering).
+  const weekly = new Array(8).fill(0).map(() => ({ closed: 0 }));
+  const weekStart = now - 8 * weekMs;
+
+  for (const it of (issues || [])) {
+    if (it.status !== 'closed') continue;
+    const closedTs = Date.parse(it.updated_at || '');
+    if (Number.isNaN(closedTs)) continue;
+
+    const ageMs = now - closedTs;
+    if (ageMs <= 7  * dayMs) closed7++;
+    if (ageMs <= 30 * dayMs) closed30++;
+
+    const createdTs = Date.parse(it.created_at || '');
+    if (!Number.isNaN(createdTs) && closedTs >= createdTs) {
+      totalDeltaMs += (closedTs - createdTs);
+      closedWithDates++;
+    }
+
+    if (closedTs >= weekStart && closedTs <= now) {
+      const idx = Math.min(7, Math.floor((closedTs - weekStart) / weekMs));
+      weekly[idx].closed++;
+    }
+  }
+
+  const avgDaysToClose = closedWithDates > 0
+    ? (totalDeltaMs / closedWithDates) / dayMs
+    : 0;
+
+  // ── Graph ────────────────────────────────────────────────────────
+  // dependencies array from getGraphViewData() is already filtered to
+  // type='blocks' edges, matching what the Graph view + WASM engine
+  // operate on.
+  const nodeCount = (issues || []).length;
+  const edgeCount = (dependencies || []).length;
+  const maxEdges  = nodeCount > 1 ? nodeCount * (nodeCount - 1) : 0;
+  const density   = maxEdges > 0 ? edgeCount / maxEdges : 0;
+
+  // phase2_ready maps to "did the WASM graph engine finish loading
+  // and the deep metrics (PageRank / betweenness / critical path /
+  // articulation points) successfully compute" — which is exactly
+  // what `this.graphReady` tracks at the call site.
+  return {
+    velocity: {
+      closed_last_7_days:   closed7,
+      closed_last_30_days:  closed30,
+      avg_days_to_close:    avgDaysToClose,
+      weekly,
+    },
+    graph: {
+      node_count:   nodeCount,
+      edge_count:   edgeCount,
+      density,
+      has_cycles:   !!(cycleInfo && cycleInfo.hasCycles),
+      cycle_count:  (cycleInfo && cycleInfo.cycleCount) || 0,
+      phase2_ready: !!graphReady,
+    },
+  };
+}
+
+/**
  * Get cycle information from graph
  */
 function getCycleInfo() {
@@ -2538,7 +2643,10 @@ function beadsApp() {
           }
         }
 
-        // Load full triage data for insights view
+        // Load full triage data for insights view. Upstream
+        // beads_viewer ships a real triage.json from its export
+        // pipeline; NppBeads's bridge intercepts the fetch and
+        // returns {} since we compute everything live.
         try {
           const triageResp = await fetch('./data/triage.json');
           if (triageResp.ok) {
@@ -2547,6 +2655,25 @@ function beadsApp() {
           }
         } catch (triageErr) {
           console.log('[Viewer] No triage.json found (optional for insights)');
+        }
+
+        // Project Velocity + Graph Health panels bind to
+        // triageData.project_health. If the fetched triage.json
+        // didn't include one (the NppBeads case, but also any other
+        // deployment shipping a partial triage file), synthesize
+        // it from the data we already have. Re-running this on
+        // every init means the panels stay current after a page
+        // reload caused by a JSONL change.
+        if (!this.triageData) this.triageData = {};
+        if (!this.triageData.project_health) {
+          try {
+            const ghd = getGraphViewData();
+            this.triageData.project_health = computeProjectHealth(
+              ghd.issues, ghd.dependencies, this.cycleInfo, this.graphReady
+            );
+          } catch (phErr) {
+            console.warn('[Viewer] project_health compute failed:', phErr);
+          }
         }
 
         this.loading = false;
