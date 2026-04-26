@@ -182,6 +182,21 @@ ln -s /Applications "$MOUNT_POINT/Applications"
 # lavender panel. Background path is HFS-style, relative to the
 # volume root, pointing inside the app bundle.
 log "Setting DMG window layout"
+# Defensive close: Finder caches window state per volume name across
+# detach/remount cycles. If a previous build left bounds cached for
+# "Beads" — say, because an earlier DMG was opened by hand and resized —
+# `open disk` here would re-use those bounds even though the .DS_Store
+# is fresh, and `set the bounds to ...` further down can race with the
+# cached state. Closing any pre-existing window for this volume before
+# `open` guarantees a clean slate.
+/usr/bin/osascript <<DEFENSIVECLOSE >/dev/null 2>&1 || true
+tell application "Finder"
+    try
+        close (every window whose target is disk "${VOLUME_NAME}")
+    end try
+end tell
+DEFENSIVECLOSE
+
 /usr/bin/osascript <<APPLESCRIPT
 tell application "Finder"
     tell disk "${VOLUME_NAME}"
