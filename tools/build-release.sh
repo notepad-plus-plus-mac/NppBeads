@@ -240,11 +240,17 @@ rm -rf "$DMG_RESTAGE" && mkdir -p "$DMG_RESTAGE"
 
 hdiutil detach "$DEVICE" >/dev/null 2>&1 || hdiutil detach "$DEVICE" -force >/dev/null 2>&1
 
+# Final compress: ULMO (lzma). Smallest commonly-supported DMG format,
+# requires macOS 10.15+ to mount. Our LSMinimumSystemVersion is 11.0
+# (Big Sur), so anyone who can run Beads can mount a ULMO DMG. Trade-
+# off is mount-time CPU cost (decompression is slower than UDZO),
+# which is paid once per install — the 20-30% download savings are
+# paid off after the first user uses the DMG.
 hdiutil create \
     -volname "$VOLUME_NAME" \
     -srcfolder "$DMG_RESTAGE" \
     -ov \
-    -format UDZO \
+    -format ULMO \
     "$DMG_OUT" >/dev/null
 
 rm -f "$DMG_TMP"
