@@ -65,6 +65,15 @@ log()  { printf "\033[1;36m▶\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m⚠\033[0m %s\n" "$*"; }
 err()  { printf "\033[1;31m✗\033[0m %s\n" "$*" >&2; exit 1; }
 
+# ── 0. Regenerate DMG background image ──────────────────────────────────────
+#
+# The Python generator owns the canonical icon-position constants. The
+# AppleScript in step 3 mirrors them (must stay in sync). Regenerating
+# every run means nobody ships a stale background by accident.
+
+log "Regenerating DMG background image"
+/usr/bin/env python3 "$PROJECT_DIR/tools/generate-dmg-background.py" >/dev/null
+
 # ── 1. Build (Release, universal arm64+x86_64) ───────────────────────────────
 
 log "Building $APP_NAME.app (Release, arm64+x86_64) → $BUILD_DIR"
@@ -102,28 +111,129 @@ codesign --force --deep --options runtime --timestamp \
 
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE" 2>&1 | tail -3
 
-# ── 3. Build the DMG ─────────────────────────────────────────────────────────
+# ── 3. Build the DMG (with custom background + icon layout) ─────────────────
+#
+# Multi-step recipe ported from the host's build-release.sh:
+#   3a. Force-refresh the bundled DMG background TIFF (dyld weirdness
+#       otherwise picks up the previous one if the same path mounted before).
+#   3b. Stage the app + create a writable UDRW image.
+#   3c. Mount, add Applications symlink (must be added AFTER mount because
+#       hdiutil -srcfolder dereferences symlinks at create time).
+#   3d. Drive Finder via AppleScript to set window bounds, hide chrome,
+#       set background image (read from inside the bundle), pin icon
+#       positions. Without this step the DMG opens as a generic Finder
+#       window with auto-arranged icons and no background.
+#   3e. Hide / remove OS metadata that would otherwise leak into the DMG
+#       window for users with "Show Hidden Files" enabled.
+#   3f. ditto-restage from the mounted UDRW into a clean directory, then
+#       hdiutil create -format UDZO from that. This produces a final
+#       compressed DMG that preserves .DS_Store + chflags + the
+#       Applications symlink.
 
 log "Packaging $DMG_NAME → $DOWNLOADS_DIR"
 mkdir -p "$DOWNLOADS_DIR"
 rm -f "$DMG_OUT"
 
-DMG_STAGE=$(mktemp -d)
-trap 'rm -rf "$DMG_STAGE"' EXIT
+VOLUME_NAME="$APP_NAME"
+MOUNT_POINT="/Volumes/$VOLUME_NAME"
+DMG_TMP="/tmp/beads_dmg_rw_$$.dmg"
+DMG_STAGE="/tmp/beads_dmg_stage_$$"
+DMG_RESTAGE="/tmp/beads_dmg_restage_$$"
 
-# Stage: app + symlink to /Applications. Users drag-and-drop the icon
-# onto the symlink to install. Standard macOS DMG convention.
+# Best-effort cleanup if a prior run left mounts behind.
+hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
+
+# 3a. Force-refresh the bundled background TIFF. macOS Resources/ files
+# can sometimes get cached at the codesign layer if the same path was
+# signed before; copying explicitly guarantees the just-regenerated tiff
+# is what ends up in the bundle for this DMG run.
+cp -f "$PROJECT_DIR/resources/dmg-background.tiff" \
+      "$APP_BUNDLE/Contents/Resources/dmg-background.tiff"
+
+# 3b. Stage the app + size the writable image. +20MB headroom over the
+# raw bundle size accommodates HFS+ overhead on small images.
+rm -rf "$DMG_STAGE" && mkdir -p "$DMG_STAGE"
 cp -R "$APP_BUNDLE" "$DMG_STAGE/"
-ln -s /Applications "$DMG_STAGE/Applications"
 
-# Build the DMG. UDZO = compressed, the smallest commonly-used format.
+STAGE_KB=$(du -sk "$DMG_STAGE" | awk '{print $1}')
+DMG_SIZE_MB=$(( STAGE_KB / 1024 + 20 ))
+
 hdiutil create \
-    -volname "$APP_NAME $APP_VERSION" \
     -srcfolder "$DMG_STAGE" \
+    -volname "$VOLUME_NAME" \
+    -fs HFS+ \
+    -fsargs "-c c=64,a=16,e=16" \
+    -format UDRW \
+    -size ${DMG_SIZE_MB}m \
+    "$DMG_TMP" >/dev/null
+
+# 3c. Mount + add Applications symlink.
+DEVICE=$(hdiutil attach -readwrite -noverify -noautoopen \
+         -mountpoint "$MOUNT_POINT" "$DMG_TMP" \
+         | grep -E '^/dev/' | head -1 | awk '{print $1}')
+ln -s /Applications "$MOUNT_POINT/Applications"
+
+# 3d. AppleScript: set the window's view options, background, icon
+# positions. Coordinates here MUST match
+# tools/generate-dmg-background.py (APP_ICON_CENTER / APPS_ICON_CENTER).
+# Window bounds give a 600x680 viewport; the 600x640 background sits
+# at the top with a small transparent strip below — that prevents a
+# scrollbar and centers the Applications folder visually inside the
+# lavender panel. Background path is HFS-style, relative to the
+# volume root, pointing inside the app bundle.
+log "Setting DMG window layout"
+/usr/bin/osascript <<APPLESCRIPT
+tell application "Finder"
+    tell disk "${VOLUME_NAME}"
+        open
+        tell container window
+            set current view to icon view
+            set toolbar visible to false
+            set statusbar visible to false
+            set pathbar visible to false
+            set sidebar width to 0
+            set the bounds to {200, 120, 800, 800}
+        end tell
+        set theViewOptions to the icon view options of container window
+        tell theViewOptions
+            set arrangement to not arranged
+            set icon size to 128
+            set text size to 14
+        end tell
+        set background picture of theViewOptions to file "${APP_NAME}.app:Contents:Resources:dmg-background.tiff"
+        set position of item "${APP_NAME}.app" of container window to {300, 130}
+        set position of item "Applications" of container window to {300, 474}
+        update without registering applications
+        delay 2
+        close
+    end tell
+end tell
+APPLESCRIPT
+
+sync
+
+# 3e. Hide OS metadata from "Show Hidden Files" users.
+rm -rf "$MOUNT_POINT/.fseventsd" "$MOUNT_POINT/.Trashes" 2>/dev/null || true
+chflags hidden "$MOUNT_POINT/.DS_Store" 2>/dev/null || true
+sync
+
+# 3f. ditto-restage + final UDZO compress. ditto preserves the .DS_Store
+# (which carries the icon positions), the Applications symlink, and the
+# chflags hidden bits we just applied.
+rm -rf "$DMG_RESTAGE" && mkdir -p "$DMG_RESTAGE"
+/usr/bin/ditto "$MOUNT_POINT" "$DMG_RESTAGE"
+
+hdiutil detach "$DEVICE" >/dev/null 2>&1 || hdiutil detach "$DEVICE" -force >/dev/null 2>&1
+
+hdiutil create \
+    -volname "$VOLUME_NAME" \
+    -srcfolder "$DMG_RESTAGE" \
     -ov \
     -format UDZO \
-    -fs HFS+ \
     "$DMG_OUT" >/dev/null
+
+rm -f "$DMG_TMP"
+rm -rf "$DMG_STAGE" "$DMG_RESTAGE"
 
 # ── 4. Sign the DMG ──────────────────────────────────────────────────────────
 

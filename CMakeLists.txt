@@ -115,6 +115,18 @@ if(NPPBEADS_BUILD_APP)
         message(WARNING "Beads.app: resources/beads.icns missing — building without an icon")
     endif()
 
+    # DMG background image. Ships INSIDE the bundle (Contents/Resources)
+    # so the DMG root stays clean — only Beads.app + the Applications
+    # symlink are visible when the DMG is mounted, even with "Show
+    # Hidden Files" enabled. The build-release.sh DMG step reads it
+    # from this in-bundle location via an HFS-style AppleScript path.
+    set(BEADS_DMG_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/dmg-background.tiff")
+    if(EXISTS "${BEADS_DMG_BG}")
+        set_source_files_properties("${BEADS_DMG_BG}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources")
+        list(APPEND BEADS_BUNDLE_RESOURCES "${BEADS_DMG_BG}")
+    endif()
+
     add_executable(Beads MACOSX_BUNDLE
         shell-app/main.mm
         shell-app/BeadsAppDelegate.mm
