@@ -1,6 +1,6 @@
 build/
-build-app/
-dist/
+build-release/
+downloads/
 .DS_Store
 *.dylib
 tmp/
