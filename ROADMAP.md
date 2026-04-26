@@ -132,10 +132,138 @@ local re-test after `--sandbox` behavior change).
 
 **Tag:** `v1.0.0` — shipped publicly.
 
+## Phase 9 — Standalone Beads.app *(~1.5–2 weeks)*
+
+Same source tree, second CMake target. Ships a native macOS app
+alongside the plugin so people who don't use Notepad++ can still use
+the Rich viewer, project switcher, Board / Dashboard / Insights /
+Graph / Activity, bd integration, federation, and Jira/GitHub/Linear
+bridges. Single repo (`NppBeads`), two release artifacts.
+
+### Why this is feasible at low cost
+
+Today the plugin already separates host-coupling from
+viewer/data-source code. Of 20 source files in `src/`, only
+`NppBeads.mm` has heavy NPP coupling. `BeadsPanel.mm` has minor
+coupling (theme detection, dock plumbing — ~30 lines).
+`BeadIdIndicator` already takes its sendMessage as a function-pointer
+abstraction, so it's host-agnostic. The remaining 16 files
+(`BdCommandRunner`, `BdDataSource`, `JsonlDataSource`,
+`BeadsDataSource`, `BeadsPoll`, `BeadsWatcher`, `BeadsProjectScanner`,
+`BeadsSchemeHandler`, etc.) are pure Cocoa + bd subprocess +
+WKWebView + JSONL parsing and don't know NPP exists. The Rich viewer
+itself is HTML+JS in a WKWebView — the same regardless of host.
+
+### Repo layout (single repo, dual target)
+
+```
+NppBeads/
+├── src/                      shared code (16 of 20 files unchanged)
+├── shell-plugin/             thin: NppBeads.mm — builds .dylib
+├── shell-app/                thin: AppDelegate, MainWindowController,
+│                             MenuBuilder — builds .app
+├── resources/                shared (viewer/, toolbar.png, icons)
+├── CMakeLists.txt            two targets, both link NppBeadsCore
+└── tools/
+    ├── build-plugin.sh       (existing path)
+    └── build-app.sh          (new — sign + notarize + DMG the .app)
+```
+
+The 16 host-agnostic files compile into a `NppBeadsCore` static
+library. Plugin shell wraps it with `setInfo` / `beNotified` /
+`messageProc` exports. App shell wraps it with `NSApplicationMain` +
+real Cocoa menu bar.
+
+### Build matrix
+
+`cmake -DNPPBEADS_BUILD_PLUGIN=ON -DNPPBEADS_BUILD_APP=ON ..` (both
+default ON). `make NppBeads` builds the dylib; `make Beads`
+builds the app. CI builds both, releases both as separate
+artifacts on the same GitHub Release.
+
+### Refactor work *(prerequisite, ~1–2 days)*
+
+Pure refactor — both shells continue to work after this lands, no
+behavior change.
+
+- Introduce `BeadsHost` protocol with two methods: `isDarkMode`,
+  `requestPanelDock:` (latter is a no-op in the app shell).
+- `BeadsPanel` takes a `BeadsHost` instead of calling
+  `_sendMessage` directly. Plugin shell implements the protocol via
+  the host's NPPM_ISDARKMODEENABLED + dock requests; app shell
+  implements via `NSApp.effectiveAppearance` + a no-op.
+- Split CMakeLists into `core` static lib + two binary targets.
+
+### App shell work *(~3–5 days)*
+
+- `AppDelegate` — open last project on launch (uses existing MRU),
+  save state on quit.
+- `MainWindowController` — single NSWindow hosting the existing
+  Rich viewer WKWebView. Title bar shows current project. Window
+  position autosaved.
+- Menu bar: standard macOS menus (App, File, Edit, View, Window,
+  Help) plus "File → Open Project Folder…" + "File → Recent
+  Projects" submenu (driven by the existing `_recordRecentProjectRoot`
+  + `kBeadsRecentProjectsKey` MRU we already use).
+- Settings/preferences window (NSWindowController, not WKWebView) —
+  bd binary path, default arrow direction, default view mode, page
+  zoom default.
+- About panel with version + Beads upstream link + license.
+- App icon (Beads logo + Mac platform conventions, multi-resolution).
+- Optional: `NSStatusItem` menu-bar icon for "Beads is watching
+  project X. ● 12 new since last visit." Click for quick peek of
+  the Activity view.
+
+### What's lost without the editor
+
+- Bead-id highlighting in code (no editor to paint into).
+- ⌘⌥⇧J jump-from-caret (no caret).
+- ⌘⌥⇧N create-issue-from-selection (no selection).
+
+These are the editor-integration killer features and they stay
+exclusive to the plugin shell. The app shell users get everything
+else.
+
+### Distribution work *(~2 days)*
+
+- Hardened-runtime entitlements for the app (`Info.plist` + entitlements
+  plist). Different from plugin signing, since the app loads no
+  external code.
+- Code-sign with Developer ID Application + notarize + staple DMG.
+- Build and ship two artifacts per GitHub Release: `NppBeads.dylib`
+  (zipped, for plugin install) and `Beads.dmg` (for the app).
+- README rewrite to introduce both faces: "Beads as a Notepad++
+  plugin" and "Beads as a standalone Mac app." Two install paths,
+  one repo.
+
+### Branding decision *(decide before app shell starts)*
+
+Lean toward two distinct names: `NppBeads.dylib` for the plugin,
+`Beads.app` (or `Beads for macOS`) for the standalone. Same source,
+same repo, same maintainer, different product brand for different
+audiences. The "Npp" prefix discourages the wider audience the app
+is meant to reach.
+
+### Strategic value
+
+Today: Beads UI for the small set of people on Notepad++ macOS.
+After Phase 9: Beads UI for **anyone on macOS who uses Beads** —
+Cursor / VS Code / Zed / IntelliJ / Vim / Emacs users, non-engineers
+on a team (PMs, designers), agent-watchers who want a
+quick-glance UI without an editor open. Upstream Beads does not
+ship a native macOS viewer; this would be the first.
+
+**Tag:** `v1.1.0` (plugin) + `Beads-v1.0.0` (app) — two tags off
+the same commit, since the binaries diverge but share a tree.
+
 ---
 
 ## Remaining estimate
 
-~10–13 working days from Phase 3 end → v1.0.0, assuming no scope creep.
-Phase 5 (editor integration) is the single biggest chunk and the unique
-value vs any other beads viewer — prioritize accordingly.
+~10–13 working days from Phase 3 end → plugin v1.0.0 (Phases
+3.5–8). Phase 5 (editor integration) is the single biggest chunk of
+that and the unique value vs any other beads viewer — prioritize
+accordingly.
+
+Phase 9 adds another ~1.5–2 weeks for the standalone app, slotted
+after v1.0.0 ships and the plugin proves itself in real use.

@@ -169,9 +169,13 @@ All five deferred items landed:
 See `ROADMAP.md` for full detail.
 
 - **Phase 7** — Polish (saved filters, keyboard shortcuts, status-bar chip)
-- **Phase 8** — Notarization + distribution (target: `v1.0.0`)
+- **Phase 8** — Notarization + distribution (target: plugin `v1.0.0`)
+- **Phase 9** — Standalone `Beads.app` built from the same source tree;
+  same repo, dual CMake target, separate signed/notarized DMG. Target:
+  app `v1.0.0` (~1.5–2 weeks after plugin v1.0.0).
 
-Estimated ~4 working days remaining to `v1.0.0` assuming no scope creep.
+Estimated ~4 working days remaining to plugin `v1.0.0` assuming no scope
+creep. App ships ~1.5–2 weeks after that.
 
 ## Flagged for host-change approval (Phase 5 polish)
 
