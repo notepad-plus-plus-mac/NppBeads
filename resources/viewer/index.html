@@ -2567,8 +2567,22 @@
 
     <!-- Full-frame Graph View (outside main for full viewport) -->
     <!-- NppBeads: top offset was 64px (upstream header we removed) — now 0 -->
+    <!-- arrowDirection: 'execution' (flow / default) or 'dependency' (depends-on).
+         Read directly from localStorage here so the dropdown matches the
+         persisted value even on first load (graph.js pulls the same key out
+         of localStorage when it initializes, so dropdown + renderer stay in
+         sync). -->
     <div x-show="view === 'graph'"
-         x-data="{ currentPreset: 'default', showControls: true }"
+         x-data="{
+           currentPreset: 'default',
+           showControls: true,
+           arrowDirection: (function(){
+             try {
+               var v = localStorage.getItem('nppbeads.arrowDirection');
+               return (v === 'dependency' || v === 'execution') ? v : 'execution';
+             } catch(_) { return 'execution'; }
+           })()
+         }"
          class="fixed inset-0 z-40 bg-gray-50 dark:bg-gray-900"
          style="top: 0;">
 
@@ -2824,6 +2838,25 @@
                      @change="toggleGraphParticles()">
             </label>
 
+            <!-- NppBeads: arrow-direction dropdown. Sits above the View
+                 dropdown per user request (no divider between them).
+                   Execution Flow  = prereq → dependent (temporal, default).
+                   Dependency Flow = dependent → prereq (build-system).
+                 Also reverses particle direction since particles ride
+                 the source→target axis; graph.js does not need any
+                 particle-specific change. -->
+            <div class="mt-1">
+              <select x-model="arrowDirection"
+                      @change="
+                        if (forceGraphModule && forceGraphModule.setArrowDirection)
+                          forceGraphModule.setArrowDirection(arrowDirection);
+                      "
+                      class="w-full text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200">
+                <option value="execution">Execution Flow</option>
+                <option value="dependency">Dependency Flow</option>
+              </select>
+            </div>
+
             <!-- NppBeads: layout-preset dropdown (revived from upstream's
                  stripped preset panel). Applies to the force-graph via
                  the module's applyPreset() export. "Default" is a soft
@@ -2863,13 +2896,13 @@
                         }
                       "
                       class="w-full text-[11px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200">
-                <option value="default">Default</option>
-                <option value="force">Force</option>
-                <option value="compact">Compact</option>
-                <option value="spread">Spread</option>
-                <option value="grid">Grid</option>
-                <option value="radial">Radial</option>
-                <option value="cluster">Cluster</option>
+                <option value="default">Default View</option>
+                <option value="force">Force View</option>
+                <option value="compact">Compact View</option>
+                <option value="spread">Spread View</option>
+                <option value="grid">Grid View</option>
+                <option value="radial">Radial View</option>
+                <option value="cluster">Cluster View</option>
               </select>
             </div>
 

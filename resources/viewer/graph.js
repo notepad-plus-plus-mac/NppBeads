@@ -362,6 +362,41 @@ class GraphStore {
 
 const store = new GraphStore();
 
+// ============================================================================
+// ARROW DIRECTION (NppBeads)
+// ============================================================================
+//  'execution'  → arrow points from prerequisite to dependent (temporal flow,
+//                 the PM-tool / Airflow / BPMN convention). DEFAULT.
+//  'dependency' → arrow points from dependent to prerequisite (build-system
+//                 / "depends-on" convention). What the graph rendered before
+//                 this option existed.
+//
+// Persisted to localStorage so the user's choice sticks across reloads. The
+// underlying WASM DiGraph (and every metric computed from it — PageRank,
+// critical path, in/out-degree) uses the dependent→prerequisite edge
+// direction unconditionally; this flag only swaps source/target at the
+// render step, so PageRank etc. stay semantically correct regardless.
+const ARROW_DIR_KEY = 'nppbeads.arrowDirection';
+let arrowDirection = (() => {
+    try {
+        const saved = localStorage.getItem(ARROW_DIR_KEY);
+        return (saved === 'dependency' || saved === 'execution') ? saved : 'execution';
+    } catch (_) { return 'execution'; }
+})();
+export function getArrowDirection() { return arrowDirection; }
+export function setArrowDirection(dir) {
+    const next = (dir === 'dependency') ? 'dependency' : 'execution';
+    if (next === arrowDirection) return;
+    arrowDirection = next;
+    try { localStorage.setItem(ARROW_DIR_KEY, next); } catch (_) {}
+    // Re-render with swapped source/target. Same code path the filter
+    // dropdowns take when they change the displayed set.
+    if (store.graph && store.issues && store.issues.length) {
+        const graphData = prepareGraphData();
+        store.graph.graphData(graphData);
+    }
+}
+
 /**
  * Helper to force ForceGraph to redraw without disturbing the simulation.
  * Uses a micro zoom adjustment trick - imperceptible to users but forces canvas redraw.
@@ -1097,13 +1132,19 @@ function prepareGraphData(layout = null) {
     const nodeIds = new Set(nodes.map(n => n.id));
 
     // Filter links
+    //
+    // source/target direction depends on the current arrowDirection mode:
+    //   'execution'  → prereq → dependent (flow convention, default)
+    //   'dependency' → dependent → prereq (build-system convention)
+    // See the arrowDirection block near the top of the module.
+    const execFlow = (arrowDirection === 'execution');
     let links = dependencies
         .filter(d => (d.type === 'blocks' || !d.type))
         .filter(d => nodeIds.has(d.issue_id) && nodeIds.has(d.depends_on_id))
         .map(d => ({
-            source: d.issue_id,
-            target: d.depends_on_id,
-            type: d.type || 'blocks'
+            source: execFlow ? d.depends_on_id : d.issue_id,
+            target: execFlow ? d.issue_id      : d.depends_on_id,
+            type:   d.type || 'blocks'
         }));
 
     // Enrich nodes with computed data
