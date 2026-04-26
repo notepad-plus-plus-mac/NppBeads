@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- App Sandbox is OFF: Beads spawns the `bd` CLI subprocess to talk
+         to the project's Dolt store. Sandboxed apps can't spawn
+         arbitrary executables outside their bundle without entitlements
+         we don't want to fight with for an MVP. Notarization works fine
+         without sandboxing for Developer-ID-distributed apps; sandboxing
+         is only mandatory for Mac App Store distribution. -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+
+    <!-- Hardened Runtime exceptions:
+         - allow-jit: WKWebView's JS engine needs JIT.
+         - allow-unsigned-executable-memory: WebKit JIT pages.
+         - allow-dyld-environment-variables: not strictly needed but
+           common for tools that rely on PATH lookups. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Beads needs to read .beads/ data wherever the user keeps
+         their projects, so user-selected files (open dialogs) and
+         downloads-folder access without prompts feel natural. With
+         sandbox off these are advisory but kept for clarity. -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+</dict>
+</plist>

@@ -11,12 +11,27 @@ set(NPP_WIN_DIR        "${CMAKE_SOURCE_DIR}/../../notepad-plus-plus")
 set(SCINTILLA_INCLUDE  "${NPP_WIN_DIR}/scintilla/include")
 set(NPP_PLUGIN_INCLUDE "${NPP_MACOS_DIR}/src")
 
+# Build-target switches. Both default ON so a clean checkout produces both
+# artifacts; turn either off (-DNPPBEADS_BUILD_PLUGIN=OFF or
+# -DNPPBEADS_BUILD_APP=OFF) to skip one when only one is wanted.
+option(NPPBEADS_BUILD_PLUGIN "Build the NppBeads.dylib Notepad++ plugin" ON)
+option(NPPBEADS_BUILD_APP    "Build the standalone Beads.app"             ON)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
-add_library(NppBeads SHARED
-    src/NppBeads.mm
+# ─────────────────────────────────────────────────────────────────────────
+#  Shared core sources — compiled into both targets.
+# ─────────────────────────────────────────────────────────────────────────
+#  These files have no Notepad++ dependency. They make up the data layer,
+#  the WKWebView panel, the bd CLI runner, the project scanner, the
+#  filesystem watcher, the live-sync poll, and the bead-id indicator
+#  (which already takes its sendMessage as a function pointer, so it's
+#  host-agnostic by construction). The plugin shell ships these alongside
+#  NppBeads.mm; the standalone shell ships them alongside the shell-app/
+#  files.
+set(BEADS_CORE_SOURCES
     src/BeadsPanel.mm
     src/JsonlDataSource.mm
     src/BeadsProjectScanner.mm
@@ -25,27 +40,106 @@ add_library(NppBeads SHARED
     src/BdCommandRunner.mm
     src/BdDataSource.mm
     src/BeadsPoll.mm
-    src/BeadIdIndicator.mm
-)
-target_include_directories(NppBeads PRIVATE
-    ${NPP_PLUGIN_INCLUDE}
-    ${SCINTILLA_INCLUDE}
-    src)
-target_link_libraries(NppBeads PRIVATE
-    "-framework Cocoa"
-    "-framework WebKit"
-    "-framework UniformTypeIdentifiers")
-target_compile_options(NppBeads PRIVATE
-    -Wall -Wno-unused-parameter
-    -fvisibility=hidden
-    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
-set_target_properties(NppBeads PROPERTIES PREFIX "" SUFFIX ".dylib")
+    src/BeadIdIndicator.mm)
 
-set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.notepad++/plugins/NppBeads")
-install(TARGETS NppBeads DESTINATION "${PLUGIN_INSTALL_DIR}")
-install(DIRECTORY resources/ DESTINATION "${PLUGIN_INSTALL_DIR}/resources"
-    PATTERN ".git"       EXCLUDE
-    PATTERN ".github"    EXCLUDE
-    PATTERN ".DS_Store"  EXCLUDE
-    PATTERN ".gitignore" EXCLUDE)
-install(FILES resources/toolbar.png DESTINATION "${PLUGIN_INSTALL_DIR}")
+# ─────────────────────────────────────────────────────────────────────────
+#  Target 1 — NppBeads.dylib (the Notepad++ plugin)
+# ─────────────────────────────────────────────────────────────────────────
+if(NPPBEADS_BUILD_PLUGIN)
+    add_library(NppBeads SHARED
+        src/NppBeads.mm
+        ${BEADS_CORE_SOURCES})
+    target_include_directories(NppBeads PRIVATE
+        ${NPP_PLUGIN_INCLUDE}
+        ${SCINTILLA_INCLUDE}
+        src)
+    target_link_libraries(NppBeads PRIVATE
+        "-framework Cocoa"
+        "-framework WebKit"
+        "-framework UniformTypeIdentifiers")
+    target_compile_options(NppBeads PRIVATE
+        -Wall -Wno-unused-parameter
+        -fvisibility=hidden
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    set_target_properties(NppBeads PROPERTIES PREFIX "" SUFFIX ".dylib")
+
+    set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.notepad++/plugins/NppBeads")
+    install(TARGETS NppBeads DESTINATION "${PLUGIN_INSTALL_DIR}")
+    install(DIRECTORY resources/ DESTINATION "${PLUGIN_INSTALL_DIR}/resources"
+        PATTERN ".git"       EXCLUDE
+        PATTERN ".github"    EXCLUDE
+        PATTERN ".DS_Store"  EXCLUDE
+        PATTERN ".gitignore" EXCLUDE
+        PATTERN "beads.icns" EXCLUDE)
+    install(FILES resources/toolbar.png DESTINATION "${PLUGIN_INSTALL_DIR}")
+endif()
+
+# ─────────────────────────────────────────────────────────────────────────
+#  Target 2 — Beads.app (standalone macOS app, same code)
+# ─────────────────────────────────────────────────────────────────────────
+if(NPPBEADS_BUILD_APP)
+    set(BEADS_APP_VERSION "1.0.0")
+
+    # Walk resources/viewer/ and resources/beads.icns recursively, register
+    # each file as a target source with MACOSX_PACKAGE_LOCATION pointing
+    # at the right path under Contents/Resources/. CMake's bundle support
+    # requires this per-file declaration — there's no equivalent of the
+    # plugin's `install(DIRECTORY)` for app bundles.
+    set(VIEWER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/resources/viewer")
+    file(GLOB_RECURSE BEADS_VIEWER_FILES
+         RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+         "${VIEWER_ROOT}/*")
+    set(BEADS_BUNDLE_RESOURCES "")
+    foreach(REL ${BEADS_VIEWER_FILES})
+        # Skip dotfiles and build artifacts (CMake's GLOB_RECURSE
+        # doesn't honor PATTERN exclusions like install(DIRECTORY) does).
+        get_filename_component(FNAME "${REL}" NAME)
+        if(FNAME STREQUAL ".DS_Store" OR FNAME STREQUAL ".gitignore"
+           OR FNAME STREQUAL ".npp-md-preview.html")
+            continue()
+        endif()
+        set(ABS "${CMAKE_CURRENT_SOURCE_DIR}/resources/${REL}")
+        get_filename_component(SUBDIR "${REL}" DIRECTORY)
+        set_source_files_properties("${ABS}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources/${SUBDIR}")
+        list(APPEND BEADS_BUNDLE_RESOURCES "${ABS}")
+    endforeach()
+
+    # App icon at the bundle's Resources root.
+    set(BEADS_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/resources/beads.icns")
+    if(EXISTS "${BEADS_ICON_PATH}")
+        set_source_files_properties("${BEADS_ICON_PATH}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources")
+        list(APPEND BEADS_BUNDLE_RESOURCES "${BEADS_ICON_PATH}")
+    else()
+        message(WARNING "Beads.app: resources/beads.icns missing — building without an icon")
+    endif()
+
+    add_executable(Beads MACOSX_BUNDLE
+        shell-app/main.mm
+        shell-app/BeadsAppDelegate.mm
+        shell-app/BeadsMainWindowController.mm
+        shell-app/BeadsMenuBuilder.mm
+        ${BEADS_CORE_SOURCES}
+        ${BEADS_BUNDLE_RESOURCES})
+
+    target_include_directories(Beads PRIVATE src shell-app)
+    target_link_libraries(Beads PRIVATE
+        "-framework Cocoa"
+        "-framework WebKit"
+        "-framework UniformTypeIdentifiers")
+    target_compile_options(Beads PRIVATE
+        -Wall -Wno-unused-parameter
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+
+    set_target_properties(Beads PROPERTIES
+        OUTPUT_NAME "Beads"
+        MACOSX_BUNDLE_BUNDLE_NAME           "Beads"
+        MACOSX_BUNDLE_GUI_IDENTIFIER        "com.notepadplusplus-mac.Beads"
+        MACOSX_BUNDLE_BUNDLE_VERSION        "${BEADS_APP_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING  "${BEADS_APP_VERSION}"
+        MACOSX_BUNDLE_EXECUTABLE_NAME       "Beads"
+        MACOSX_BUNDLE_ICON_FILE             "beads.icns"
+        MACOSX_BUNDLE_INFO_PLIST            "${CMAKE_CURRENT_SOURCE_DIR}/shell-app/Info.plist.in"
+    )
+endif()
