@@ -566,12 +566,6 @@ static const CGFloat kBeadsZoomStep    = 0.10;
         return;
     }
 
-    // Capture whether we had a prior project BEFORE we overwrite
-    // self.project below — the post-bind WebKit-update decision
-    // (reload vs. evaluateJavaScript vs. no-op) depends on knowing
-    // whether this is a cross-project transition or a first-ever bind.
-    BOOL hadPreviousProject = (self.project != nil);
-
     // Tear down any previous-project live-sync poll BEFORE changing state.
     // BeadsPoll's -stop bumps its generation counter so any in-flight bd
     // completion for the old project becomes a no-op.
@@ -653,40 +647,49 @@ static const CGFloat kBeadsZoomStep    = 0.10;
     // Reinstall the user script so future page navigations (e.g. user
     // switches view modes) inject the latest JSONL at document-start.
     [self _installJsonlUserScript];
-    // Three sub-cases for the post-bind page update:
+    // Two sub-cases for the post-bind page update. The threshold that
+    // matters is whether the page is SETTLED — `_viewerLoaded == YES`
+    // means didFinishNavigation has fired and the load is done.
     //
-    //  A) FIRST-EVER bind in this session (no prior project, page is
-    //     still loading from _loadViewer ~hundreds of ms earlier).
-    //     A [_webView reload] here races _loadViewer — we observed a
-    //     30 s 'Client reload' timeout followed by a TextInputUI/
-    //     CursorUI ViewBridge collapse and an abort. So don't reload;
-    //     the user script we just reinstalled will inject the right
-    //     JSONL at document-start when the in-flight load finishes.
+    //  PAGE MID-LOAD (`_viewerLoaded == NO`).
+    //     Either _loadViewer just kicked off (cold start) or a prior
+    //     reload is still in flight. Reloading here would race the
+    //     in-flight load — we observed a 30 s 'Client reload'
+    //     timeout followed by a TextInputUI/CursorUI ViewBridge
+    //     collapse and an abort. Skip the reload; the user script
+    //     we just reinstalled will inject the right JSONL at
+    //     document-start when the in-flight load finishes.
     //
-    //  B) CROSS-PROJECT transition (prior project was different).
-    //     The page has been loaded for a while and is in a settled
-    //     state; a reload does NOT race anything. We MUST reload
-    //     here, because Alpine state / sql.js DB / Board overlays
-    //     etc. were built from the OLD project's data and won't
-    //     reset just by pushing new JSONL. evaluateJavaScript would
-    //     leave the user looking at stale dashboard counts.
+    //  PAGE SETTLED (`_viewerLoaded == YES`).
+    //     Reload is safe and is the only thing that reliably refreshes
+    //     the Rich viewer. evaluateJavaScript-pushed JSONL is enough
+    //     for Board/Activity (`__nppApp.reload(jsonl)` is a defined
+    //     refresh hook), but for the Dashboard/Issues/Insights/Graph
+    //     views the Rich viewer reads its data once at init from
+    //     `__nppBeadsPreloadedJsonl` and never re-reads it —
+    //     `__nppBeads.receiveJsonl` only resolves pending init-time
+    //     promises, which there aren't any once init has completed.
+    //     A reload re-runs the Rich viewer's init with the just-
+    //     reinstalled user script, which now embeds the new JSONL.
     //
-    //  C) Page is loaded but no prior project (rare — first bind that
-    //     happens AFTER _loadViewer completed). Push fresh JSONL via
-    //     evaluateJavaScript, no reload needed.
+    //     Earlier versions split this case three ways and broadcast
+    //     instead of reloading when there was no prior project; that
+    //     path silently dropped data into the Rich viewer because of
+    //     the receiveJsonl no-op described above. The unbind→rebind
+    //     workflow surfaced it: the unbind reloaded the page (now
+    //     settled with empty data), then the rebind broadcast was a
+    //     no-op for the Rich viewer, so the Dashboard appeared empty
+    //     until a second project switch forced a real reload.
     //
     // Same-project rebinds short-circuit at the top of this method
-    // and never reach here.
-    if (hadPreviousProject && _webView.URL && _viewerLoaded) {
-        // Case B — cross-project transition.
+    // and never reach here, so the reload below is never wasted on a
+    // "nothing changed" path.
+    if (_webView.URL && _viewerLoaded) {
         _viewerLoaded = NO;
         [_webView reload];
-    } else if (_webView.URL && _viewerLoaded) {
-        // Case C — page loaded, first project bind.
-        [self _broadcastDataChanged];
     }
-    // else: case A — page mid-load. didFinishNavigation will inject
-    // the fresh JSONL via the user script we just reinstalled.
+    // else: page mid-load — didFinishNavigation will inject the fresh
+    // JSONL via the user script we just reinstalled.
 }
 
 - (void)reloadData {
