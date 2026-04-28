@@ -78,7 +78,7 @@ endif()
 #  Target 2 — Beads.app (standalone macOS app, same code)
 # ─────────────────────────────────────────────────────────────────────────
 if(NPPBEADS_BUILD_APP)
-    set(BEADS_APP_VERSION "1.0.0")
+    set(BEADS_APP_VERSION "0.9.0")
 
     # Walk resources/viewer/ and resources/beads.icns recursively, register
     # each file as a target source with MACOSX_PACKAGE_LOCATION pointing
