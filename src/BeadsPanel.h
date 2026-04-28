@@ -60,6 +60,15 @@ typedef NS_ENUM(NSInteger, BeadsThemePref) {
 // the dock/float state, so the panel just asks it to hide.
 @property (nonatomic, copy, nullable) void (^hideHandler)(void);
 
+// Fires whenever the panel's bound project changes — including via the
+// in-app project switcher chip in the toolbar. Hosts that surround the
+// panel with chrome (e.g. the standalone Beads.app's window controller,
+// which puts the project name in the window title) set this to reflect
+// the change. Optional: callers that don't set it see no behaviour
+// change. The plugin (NppBeads.mm) doesn't surround the panel with a
+// project-aware host, so it leaves this handler unset.
+@property (nonatomic, copy, nullable) void (^projectDidChangeHandler)(BeadsProject * _Nullable project);
+
 // Whether the "Hide panel" item appears in the overflow / context
 // menu. Default YES (plugin shell — the docked panel must be
 // dismissable from inside it). The standalone app shell sets this to

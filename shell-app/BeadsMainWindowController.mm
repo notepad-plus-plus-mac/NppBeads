@@ -68,6 +68,21 @@ static const CGFloat kMinWindowH     = 400.0;
     // hideHandler since no caller in the standalone path will fire it.)
     _beadsPanel.showsHidePanelMenuItem = NO;
 
+    // Update the window title whenever the panel's bound project changes
+    // — including via the in-app project switcher, which doesn't route
+    // through our own bindProject: above. Weak self avoids a retain cycle
+    // (controller strongly owns the panel which retains this block).
+    __weak typeof(self) weakSelf = self;
+    _beadsPanel.projectDidChangeHandler = ^(BeadsProject * _Nullable project) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (project) {
+            [strongSelf _setWindowTitleFromProjectRoot:project.projectRoot];
+        } else {
+            strongSelf.window.title = @"Beads";
+        }
+    };
+
     self.window.contentView = _beadsPanel;
 }
 

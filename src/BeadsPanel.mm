@@ -563,6 +563,11 @@ static const CGFloat kBeadsZoomStep    = 0.10;
         }
         [self _refreshTitleBar];
         [self _refreshStatusBar];
+        // Notify host (e.g. standalone Beads.app's window controller) so
+        // chrome that depends on the project name — like the window title
+        // — can update. Plugin shells leave the handler unset and see no
+        // behaviour change.
+        if (self.projectDidChangeHandler) self.projectDidChangeHandler(project);
         return;
     }
 
@@ -690,6 +695,14 @@ static const CGFloat kBeadsZoomStep    = 0.10;
     }
     // else: page mid-load — didFinishNavigation will inject the fresh
     // JSONL via the user script we just reinstalled.
+
+    // Notify host (e.g. standalone Beads.app's window controller) so
+    // chrome that depends on the project name — like the window title
+    // — can update. Plugin shells leave the handler unset and see no
+    // behaviour change. Fired AFTER the webview reload kicks off so any
+    // host UI the handler updates renders simultaneously with the new
+    // project's content.
+    if (self.projectDidChangeHandler) self.projectDidChangeHandler(project);
 }
 
 - (void)reloadData {
