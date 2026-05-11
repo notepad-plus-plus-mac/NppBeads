@@ -63,7 +63,7 @@ if(NPPBEADS_BUILD_PLUGIN)
         $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     set_target_properties(NppBeads PROPERTIES PREFIX "" SUFFIX ".dylib")
 
-    set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.notepad++/plugins/NppBeads")
+    set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.nextpad++/plugins/NppBeads")
     install(TARGETS NppBeads DESTINATION "${PLUGIN_INSTALL_DIR}")
     install(DIRECTORY resources/ DESTINATION "${PLUGIN_INSTALL_DIR}/resources"
         PATTERN ".git"       EXCLUDE
@@ -78,7 +78,7 @@ endif()
 #  Target 2 — Beads.app (standalone macOS app, same code)
 # ─────────────────────────────────────────────────────────────────────────
 if(NPPBEADS_BUILD_APP)
-    set(BEADS_APP_VERSION "0.9.0")
+    set(BEADS_APP_VERSION "0.9.1")
 
     # Walk resources/viewer/ and resources/beads.icns recursively, register
     # each file as a target source with MACOSX_PACKAGE_LOCATION pointing
@@ -127,7 +127,7 @@ if(NPPBEADS_BUILD_APP)
         list(APPEND BEADS_BUNDLE_RESOURCES "${BEADS_DMG_BG}")
     endif()
 
-    add_executable(Beads MACOSX_BUNDLE
+    add_executable(BeadsViewer MACOSX_BUNDLE
         shell-app/main.mm
         shell-app/BeadsAppDelegate.mm
         shell-app/BeadsMainWindowController.mm
@@ -135,32 +135,32 @@ if(NPPBEADS_BUILD_APP)
         ${BEADS_CORE_SOURCES}
         ${BEADS_BUNDLE_RESOURCES})
 
-    target_include_directories(Beads PRIVATE src shell-app)
-    target_link_libraries(Beads PRIVATE
+    target_include_directories(BeadsViewer PRIVATE src shell-app)
+    target_link_libraries(BeadsViewer PRIVATE
         "-framework Cocoa"
         "-framework WebKit"
         "-framework UniformTypeIdentifiers")
-    target_compile_options(Beads PRIVATE
+    target_compile_options(BeadsViewer PRIVATE
         -Wall -Wno-unused-parameter
         # Release-only: optimize for size and let visibility=hidden
         # drop unexported symbols so the linker can dead-strip more.
         $<$<CONFIG:Release>:-Os>
         $<$<CONFIG:Release>:-fvisibility=hidden>
         $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
-    target_link_options(Beads PRIVATE
+    target_link_options(BeadsViewer PRIVATE
         # Dead-strip unreferenced code. With -fvisibility=hidden on
         # the compile side, the linker can prove far more code is
         # unreachable. Combined with strip -x in tools/build-release.sh
         # this trims the universal binary by ~20-30%.
         $<$<CONFIG:Release>:-Wl,-dead_strip>)
 
-    set_target_properties(Beads PROPERTIES
-        OUTPUT_NAME "Beads"
-        MACOSX_BUNDLE_BUNDLE_NAME           "Beads"
-        MACOSX_BUNDLE_GUI_IDENTIFIER        "com.notepadplusplus-mac.Beads"
+    set_target_properties(BeadsViewer PROPERTIES
+        OUTPUT_NAME "BeadsViewer"
+        MACOSX_BUNDLE_BUNDLE_NAME           "BeadsViewer"
+        MACOSX_BUNDLE_GUI_IDENTIFIER        "org.nextpadplusplus.mac.BeadsViewer"
         MACOSX_BUNDLE_BUNDLE_VERSION        "${BEADS_APP_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING  "${BEADS_APP_VERSION}"
-        MACOSX_BUNDLE_EXECUTABLE_NAME       "Beads"
+        MACOSX_BUNDLE_EXECUTABLE_NAME       "BeadsViewer"
         MACOSX_BUNDLE_ICON_FILE             "beads.icns"
         MACOSX_BUNDLE_INFO_PLIST            "${CMAKE_CURRENT_SOURCE_DIR}/shell-app/Info.plist.in"
     )

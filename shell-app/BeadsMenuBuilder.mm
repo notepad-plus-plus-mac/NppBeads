@@ -33,12 +33,12 @@ static NSMenuItem *addItem(NSMenu *m, NSString *title, SEL action,
 
 + (NSMenuItem *)_appMenu {
     // The first menu's title isn't displayed — AppKit replaces it with the
-    // app's CFBundleName ("Beads"). Conventional title is the app name
-    // itself, but anything works.
+    // app's CFBundleName ("BeadsViewer"). Conventional title is the app
+    // name itself, but anything works.
     NSMenuItem *appMenuItem = [[NSMenuItem alloc] init];
-    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Beads"];
+    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"BeadsViewer"];
 
-    addItem(appMenu, @"About Beads", @selector(orderFrontStandardAboutPanel:),
+    addItem(appMenu, @"About BeadsViewer", @selector(orderFrontStandardAboutPanel:),
             @"", 0, NSApp);
     [appMenu addItem:[NSMenuItem separatorItem]];
 
@@ -51,7 +51,7 @@ static NSMenuItem *addItem(NSMenu *m, NSString *title, SEL action,
     [appMenu addItem:services];
     [appMenu addItem:[NSMenuItem separatorItem]];
 
-    addItem(appMenu, @"Hide Beads", @selector(hide:), @"h", 0, NSApp);
+    addItem(appMenu, @"Hide BeadsViewer", @selector(hide:), @"h", 0, NSApp);
     NSMenuItem *hideOthers = addItem(appMenu, @"Hide Others",
                                      @selector(hideOtherApplications:), @"h",
                                      NSEventModifierFlagOption | NSEventModifierFlagCommand,
@@ -60,7 +60,7 @@ static NSMenuItem *addItem(NSMenu *m, NSString *title, SEL action,
     addItem(appMenu, @"Show All", @selector(unhideAllApplications:),
             @"", 0, NSApp);
     [appMenu addItem:[NSMenuItem separatorItem]];
-    addItem(appMenu, @"Quit Beads", @selector(terminate:), @"q", 0, NSApp);
+    addItem(appMenu, @"Quit BeadsViewer", @selector(terminate:), @"q", 0, NSApp);
 
     appMenuItem.submenu = appMenu;
     return appMenuItem;

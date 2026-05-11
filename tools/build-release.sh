@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Build, sign, and package the standalone Beads.app for distribution.
+# Build, sign, and package the standalone BeadsViewer.app for distribution.
 #
 # Mirrors the layout of notepad-plus-plus-macos/tools/build-release.sh:
 #   - Universal Release build of the .app lands in   build-release/
@@ -34,7 +34,8 @@ BUILD_DIR="$PROJECT_DIR/build-release"
 DOWNLOADS_DIR="$PROJECT_DIR/downloads"
 ENTITLEMENTS="$PROJECT_DIR/shell-app/Beads.entitlements"
 
-APP_NAME="Beads"
+APP_NAME="BeadsViewer"
+CMAKE_TARGET="BeadsViewer"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 
 # Read version from CMakeLists so this stays in sync with the source of
@@ -43,7 +44,10 @@ APP_VERSION=$(grep -E '^\s*set\s*\(\s*BEADS_APP_VERSION\s+"' "$PROJECT_DIR/CMake
               | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 [ -z "$APP_VERSION" ] && APP_VERSION="1.0.0"
 
-DMG_NAME="${APP_NAME}v${APP_VERSION}.dmg"
+# Filename uses underscore (BeadsViewer_<version>.dmg) — different from the
+# host's `Nextpad++v<version>.dmg` convention. Reason: macOS Finder shows
+# this as the volume label on mount and underscore reads cleaner here.
+DMG_NAME="${APP_NAME}_${APP_VERSION}.dmg"
 DMG_OUT="$DOWNLOADS_DIR/$DMG_NAME"
 
 # Auto-detect signing identity (same logic as the host's build-release.sh).
@@ -90,7 +94,7 @@ cmake "$PROJECT_DIR" \
     -DNPPBEADS_BUILD_APP=ON \
     >/dev/null
 
-cmake --build . --target Beads --config Release -- -j"$(sysctl -n hw.ncpu)"
+cmake --build . --target "$CMAKE_TARGET" --config Release -- -j"$(sysctl -n hw.ncpu)"
 
 [ -d "$APP_BUNDLE" ] || err "Build did not produce $APP_BUNDLE"
 
