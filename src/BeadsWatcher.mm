@@ -10,6 +10,20 @@
     NSString           *_watchedPath;
 }
 
+- (instancetype)init {
+    if ((self = [super init])) {
+        // Mark _fd as "not open" so -stop doesn't try to close(0). Without
+        // this, the implicit zero-init makes _fd == 0 ≡ stdin, and -stop's
+        // `if (_fd >= 0) close(_fd);` tries to close stdin. macOS guards
+        // fd 0 once specific frameworks (WebKit, in particular) finish
+        // initializing — a guarded close(0) raises EXC_GUARD / SIGKILL.
+        // -stop is invariably called by -watchPath: before opening a new
+        // fd, so a fresh watcher's first watchPath: would trip the guard.
+        _fd = -1;
+    }
+    return self;
+}
+
 - (void)dealloc { [self stop]; }
 
 - (NSString *)watchedPath { return _watchedPath; }
