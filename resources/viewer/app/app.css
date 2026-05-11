@@ -5,6 +5,12 @@
    toggle theme by flipping one attribute on <html>. */
 
 :root {
+  /* Tell WebKit which native-widget palette to render. Without this,
+     default-styled scrollbars + form controls ignore [data-theme]
+     and stay light even when our dark vars are active — that's how
+     the Activity view's overflow-y:auto scrollbar ended up white
+     on a dark background. The dark override lives below. */
+  color-scheme: light;
   --bg:        #f8fafc;
   --bg-elev:   #ffffff;
   --border:    #e2e8f0;
@@ -22,6 +28,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg:        #0f172a;
   --bg-elev:   #1e293b;
   --border:    #334155;
@@ -1068,6 +1075,10 @@ body { display: flex; flex-direction: column; }
 .modal-ts .ts-v { color: var(--text); }
 
 /* ─── Scrollbars (match native-ish Apple look) ─────────────────────── */
+/* Only the Kanban Board surfaces get the slim 8px custom thumb. The
+   Activity / Dashboard / Insights / Issues views keep WebKit's default
+   native scrollbar (color-scheme above makes it render dark on dark);
+   matches the visual width users see in the index.html main views. */
 .col-body::-webkit-scrollbar,
 .board-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
 .col-body::-webkit-scrollbar-thumb,
