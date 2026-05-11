@@ -2,7 +2,7 @@
 #import "BeadsMainWindowController.h"
 #import "BeadsMenuBuilder.h"
 #import "BeadsPanel.h"
-#import "BeadsProjectScanner.h"
+#import "BeadsProjectScanner.h"  // declares both BeadsProject and BeadsProjectScanner
 
 // Same key the plugin uses, so the standalone and plugin share a project list.
 static NSString * const kBeadsRecentProjectsKey = @"NppBeadsRecentProjectRoots";
@@ -10,13 +10,18 @@ static NSString * const kBeadsRecentProjectsKey = @"NppBeadsRecentProjectRoots";
 static NSString * const kBeadsHasLaunchedKey    = @"BeadsHasLaunched";
 
 @implementation BeadsAppDelegate {
+    // All open project windows, in creation order. Strong refs so they
+    // stay alive until their NSWindow closes; we remove on
+    // NSWindowWillCloseNotification (see _registerCloseHandlerFor:).
+    NSMutableArray<BeadsMainWindowController *> *_windowControllers;
+
     // Lazy-built each time File menu opens so the latest MRU shows.
     NSMenu *_recentProjectsMenu;
 }
 
 - (instancetype)init {
     if ((self = [super init])) {
-        _windowController = [[BeadsMainWindowController alloc] init];
+        _windowControllers = [NSMutableArray new];
     }
     return self;
 }
@@ -31,65 +36,188 @@ static NSString * const kBeadsHasLaunchedKey    = @"BeadsHasLaunched";
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)note {
-    [self.windowController showWindow:self];
-
-    // Try to bind the last-used project. Strategy:
-    //   1. First MRU entry from NppBeadsRecentProjectRoots (shared with plugin).
-    //   2. If MRU is empty or top entry no longer resolves, leave the panel
-    //      unbound — user opens via File → Open Project Folder.
+    // Resume the most-recent project on launch — same behavior as the
+    // single-window predecessor. The user can open additional projects
+    // from File menu, drag-onto-dock, or double-click .beads files, each
+    // of which spawns its own window.
     NSString *firstMRU = [self _firstResolvableMRUProjectRoot];
-    if (firstMRU.length) {
-        BeadsProject *proj = [BeadsProjectScanner projectFromRoot:firstMRU];
-        if (proj) {
-            [self.windowController bindProject:proj];
-        }
-    }
+    BeadsProject *firstProj = firstMRU.length
+        ? [BeadsProjectScanner projectFromRoot:firstMRU]
+        : nil;
 
-    // First-launch nudge: if no MRU at all, prompt with the open dialog.
     NSUserDefaults *def = [NSUserDefaults standardUserDefaults];
-    if (![def boolForKey:kBeadsHasLaunchedKey]) {
-        [def setBool:YES forKey:kBeadsHasLaunchedKey];
-        NSArray *mru = [def arrayForKey:kBeadsRecentProjectsKey];
-        if (mru.count == 0) {
-            // Defer one runloop turn so the window paints first; otherwise
-            // the modal sheet stacks on top of an empty white square.
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self openProjectFolder:nil];
-            });
-        }
+    BOOL firstLaunch = ![def boolForKey:kBeadsHasLaunchedKey];
+    if (firstLaunch) [def setBool:YES forKey:kBeadsHasLaunchedKey];
+
+    if (firstProj) {
+        [self _openWindowForProject:firstProj];
+    } else if (firstLaunch) {
+        // No MRU + never launched: skip the empty window and go straight
+        // to the open-folder dialog. Saves the user a click and avoids
+        // showing a blank shell on first impression.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self openProjectFolder:nil];
+        });
+    } else {
+        // Returning user but every saved MRU went stale (projects moved
+        // / deleted). Open an empty window so File menu is accessible.
+        [self _openWindowForProject:nil];
     }
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
-    // Single-window app — closing the only window quits. Same convention
-    // as Calculator, Stickies, Activity Monitor.
+    // Closing the last project window quits — matches Calculator, Stickies,
+    // Activity Monitor. Multi-window doesn't change this: with N windows
+    // open, closing N-1 of them leaves the app running on the last one;
+    // closing the last quits.
     return YES;
 }
 
-- (BOOL)applicationOpenUntitledFile:(NSApplication *)sender {
-    // Reopen-on-dock-click reuses the existing window if hidden.
-    if (!self.windowController.window.isVisible) {
-        [self.windowController showWindow:self];
-    }
-    return YES;
+- (BOOL)applicationShouldOpenUntitledFile:(NSApplication *)sender {
+    // On launch with no document URL, AppKit would otherwise call
+    // applicationOpenUntitledFile: between willFinishLaunching: and
+    // didFinishLaunching: — racing our own startup logic and producing
+    // a duplicate empty window stacked under the MRU window. Returning
+    // NO suppresses that path entirely; didFinishLaunching: owns
+    // startup-time window creation.
+    //
+    // We don't need an openUntitled hook for dock-click either:
+    // applicationShouldTerminateAfterLastWindowClosed: returns YES, so
+    // the app quits the moment the last window closes — clicking the
+    // dock icon afterwards is a fresh launch (didFinishLaunching: runs
+    // again). The "running with no windows" state never persists.
+    return NO;
 }
 
 - (void)application:(NSApplication *)application openURLs:(NSArray<NSURL *> *)urls {
-    // Drag-folder-onto-app + double-click-folder. Take the first URL,
-    // walk up to find .beads/.
+    // Drag-folder-onto-app, double-click-folder, or `open <path>` from the
+    // shell. One window per resolvable URL; duplicates focus the existing
+    // window instead of opening a second copy.
+    BOOL openedAny = NO;
+    NSURL *failedURL = nil;
     for (NSURL *url in urls) {
         if (!url.isFileURL) continue;
         BeadsProject *proj = [BeadsProjectScanner findProjectFromPath:url.path];
         if (proj) {
-            [self.windowController bindProject:proj];
-            return;
+            [self _openOrFocusProject:proj];
+            openedAny = YES;
+        } else if (!failedURL) {
+            failedURL = url;
         }
     }
-    // None of the dropped paths resolved — alert.
-    [self _showAlertNoBeadsFound:urls.firstObject.path ?: @""];
+    if (!openedAny && failedURL) {
+        [self _showAlertNoBeadsFound:failedURL.path];
+    }
+}
+
+#pragma mark - Window management
+
+- (NSArray<BeadsMainWindowController *> *)windowControllers {
+    return [_windowControllers copy];
+}
+
+/// Create a new window controller for `proj` (nil → empty window), wire
+/// up close-tracking, and bring it forward.
+- (BeadsMainWindowController *)_openWindowForProject:(nullable BeadsProject *)proj {
+    BeadsMainWindowController *wc = [[BeadsMainWindowController alloc] initWithProject:proj];
+    [_windowControllers addObject:wc];
+    [self _registerCloseHandlerFor:wc];
+    [wc showWindow:self];
+    [wc.window makeKeyAndOrderFront:nil];
+    return wc;
+}
+
+/// Window-close observer: when an NSWindow fires WillClose, drop our
+/// strong ref to its controller. Without this, the WC stays alive (and
+/// so does its BeadsPanel + WKWebView + bd CLI runner), AND
+/// applicationShouldTerminateAfterLastWindowClosed: never fires because
+/// AppKit thinks there are still windows pending.
+///
+/// Self-unregistering: the observer block captures its own token via
+/// __block and removes itself at the end. Otherwise we'd leak one
+/// observer per opened window over the app's lifetime.
+- (void)_registerCloseHandlerFor:(BeadsMainWindowController *)wc {
+    __weak typeof(self) weakSelf = self;
+    __weak BeadsMainWindowController *weakWC = wc;
+    __block id token = nil;
+    token = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSWindowWillCloseNotification
+                    object:wc.window
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *note) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        BeadsMainWindowController *strongWC = weakWC;
+        if (strongSelf && strongWC) {
+            [strongSelf->_windowControllers removeObject:strongWC];
+        }
+        if (token) [[NSNotificationCenter defaultCenter] removeObserver:token];
+    }];
+}
+
+/// If a window is already bound to `proj.projectRoot`, focus it; else
+/// open a new window. Path comparison uses standardized paths to ignore
+/// trailing slashes and symlink differences.
+- (BeadsMainWindowController *)_openOrFocusProject:(BeadsProject *)proj {
+    BeadsMainWindowController *existing =
+        [self _existingWindowControllerForProjectRoot:proj.projectRoot];
+    if (existing) {
+        if (existing.window.isMiniaturized) [existing.window deminiaturize:nil];
+        [existing.window makeKeyAndOrderFront:nil];
+        return existing;
+    }
+    return [self _openWindowForProject:proj];
+}
+
+/// Returns the window controller whose bound project root matches `root`,
+/// or nil if none. Empty windows (boundProjectRoot == nil) never match.
+- (nullable BeadsMainWindowController *)_existingWindowControllerForProjectRoot:(NSString *)root {
+    if (!root.length) return nil;
+    NSString *target = [root stringByStandardizingPath];
+    for (BeadsMainWindowController *wc in _windowControllers) {
+        if (wc.boundProjectRoot.length && [wc.boundProjectRoot isEqualToString:target]) {
+            return wc;
+        }
+    }
+    return nil;
+}
+
+/// The window that should receive a per-window menu action (Reload,
+/// Reveal). Prefer the key window; fall back to the first one in our
+/// list (no key window typically means the app is in the background or
+/// only the menu bar is active).
+- (nullable BeadsMainWindowController *)_activeWindowController {
+    NSWindow *key = NSApp.keyWindow;
+    for (BeadsMainWindowController *wc in _windowControllers) {
+        if (wc.window == key) return wc;
+    }
+    return _windowControllers.firstObject;
+}
+
+#pragma mark - Dock menu
+
+- (NSMenu *)applicationDockMenu:(NSApplication *)sender {
+    // Right-click / Ctrl-click on the dock icon shows this menu merged
+    // above macOS's stock items (Options, Show All Windows, Quit). One
+    // entry — "New Window" — opens an empty BeadsViewer window so users
+    // can quickly bind another project without going through the menu
+    // bar or the running app's File menu.
+    NSMenu *menu = [[NSMenu alloc] init];
+    NSMenuItem *newWin = [[NSMenuItem alloc] initWithTitle:@"New Window"
+                                                    action:@selector(newWindow:)
+                                             keyEquivalent:@""];
+    newWin.target = self;
+    [menu addItem:newWin];
+    return menu;
 }
 
 #pragma mark - File menu actions
+
+- (IBAction)newWindow:(id)sender {
+    // Opens a fresh empty window. The panel inside it picks up the user's
+    // most recent project as a default via its in-panel project chip; the
+    // user can also switch projects from File > Open Project Folder.
+    [self _openWindowForProject:nil];
+}
 
 - (IBAction)openProjectFolder:(id)sender {
     NSOpenPanel *op = [NSOpenPanel openPanel];
@@ -101,8 +229,7 @@ static NSString * const kBeadsHasLaunchedKey    = @"BeadsHasLaunched";
                                  @"or the .beads/ directory itself.";
     op.directoryURL            = [self _bestStartingDirectoryForOpen];
 
-    [op beginSheetModalForWindow:self.windowController.window
-               completionHandler:^(NSModalResponse rc) {
+    void (^handle)(NSModalResponse) = ^(NSModalResponse rc) {
         if (rc != NSModalResponseOK) return;
         NSURL *url = op.URL;
         if (!url) return;
@@ -113,19 +240,28 @@ static NSString * const kBeadsHasLaunchedKey    = @"BeadsHasLaunched";
         //   - User picked some random file/folder under the project.
         BeadsProject *proj = [BeadsProjectScanner findProjectFromPath:url.path];
         if (proj) {
-            [self.windowController bindProject:proj];
+            [self _openOrFocusProject:proj];
         } else {
             [self _showAlertNoBeadsFound:url.path];
         }
-    }];
+    };
+
+    // Sheet-mode when we have a window to attach to; modal otherwise (eg.
+    // launch path with no windows yet, or all windows already closed).
+    NSWindow *parent = NSApp.keyWindow ?: _windowControllers.firstObject.window;
+    if (parent) {
+        [op beginSheetModalForWindow:parent completionHandler:handle];
+    } else {
+        handle([op runModal]);
+    }
 }
 
 - (IBAction)reloadProjectData:(id)sender {
-    [self.windowController.beadsPanel reloadData];
+    [[self _activeWindowController].beadsPanel reloadData];
 }
 
 - (IBAction)revealBeadsInFinder:(id)sender {
-    [self.windowController.beadsPanel openBeadsDirInFinder:sender];
+    [[self _activeWindowController].beadsPanel openBeadsDirInFinder:sender];
 }
 
 - (IBAction)openRecentProject:(id)sender {
@@ -139,7 +275,7 @@ static NSString * const kBeadsHasLaunchedKey    = @"BeadsHasLaunched";
     NSString *root = mru[idx];
     BeadsProject *proj = [BeadsProjectScanner projectFromRoot:root];
     if (proj) {
-        [self.windowController bindProject:proj];
+        [self _openOrFocusProject:proj];
     } else {
         [self _showAlertNoBeadsFound:root];
         // Stale entry — strip it from the MRU so it stops appearing.

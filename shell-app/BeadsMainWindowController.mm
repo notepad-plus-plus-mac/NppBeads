@@ -1,10 +1,16 @@
 #import "BeadsMainWindowController.h"
 #import "BeadsPanel.h"
-#import "BeadsProjectScanner.h"
+#import "BeadsProjectScanner.h"  // declares both BeadsProject and BeadsProjectScanner
 
-// Window-frame autosave name. Different from the plugin's panel-frame
-// autosave so the two coexist without overwriting each other.
-static NSString * const kBeadsWindowFrameAutosave = @"Beads.MainWindow";
+// Window-frame autosave name prefix. The full name is per-project: keying
+// off the bound project's root path means two windows on two projects
+// don't fight over the same saved frame, and each project remembers its
+// own size + position across launches.
+//
+// Empty windows (no project bound) all share a single fallback key —
+// they're rare (only first launch with no MRU) and one is enough.
+static NSString * const kBeadsWindowAutosaveBase  = @"Beads.MainWindow";
+static NSString * const kBeadsWindowAutosaveEmpty = @"Beads.MainWindow.Empty";
 
 // Sensible default size when there's no autosaved frame yet.
 static const CGFloat kDefaultWindowW = 980.0;
@@ -14,7 +20,7 @@ static const CGFloat kMinWindowH     = 400.0;
 
 @implementation BeadsMainWindowController
 
-- (instancetype)init {
+- (instancetype)initWithProject:(nullable BeadsProject *)project {
     NSRect contentRect = NSMakeRect(0, 0, kDefaultWindowW, kDefaultWindowH);
     // Standard title bar style. We deliberately do NOT use
     // NSWindowStyleMaskFullSizeContentView here: the BeadsPanel's
@@ -35,18 +41,27 @@ static const CGFloat kMinWindowH     = 400.0;
                                                    styleMask:styleMask
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
-    window.title           = @"Beads";
+    window.title              = @"BeadsViewer";
     window.releasedWhenClosed = NO;
-    window.minSize         = NSMakeSize(kMinWindowW, kMinWindowH);
+    window.minSize            = NSMakeSize(kMinWindowW, kMinWindowH);
 
     if ((self = [super initWithWindow:window])) {
-        // Autosave AFTER we've called super's designated initializer so the
-        // restoration applies to a window that's tied to the controller.
-        [window setFrameAutosaveName:kBeadsWindowFrameAutosave];
-        [window center];                         // first-launch fallback
-        [window setFrameUsingName:kBeadsWindowFrameAutosave];
+        _boundProjectRoot = [project.projectRoot.stringByStandardizingPath copy];
+
+        NSString *autosave = [[self class] _autosaveNameForProjectRoot:_boundProjectRoot];
+        [window setFrameAutosaveName:autosave];
+        // center: first-launch fallback when no autosaved frame exists.
+        // setFrameUsingName: applies the persisted frame if it does.
+        // Multi-window note: AppKit's NSWindow cascading kicks in only
+        // when two windows share an autosave name and one is already open
+        // — with per-project keys, two distinct projects open at their
+        // own saved positions instead of cascading. Acceptable.
+        [window center];
+        [window setFrameUsingName:autosave];
 
         [self _installBeadsPanel];
+
+        if (project) [self bindProject:project];
     }
     return self;
 }
@@ -68,18 +83,20 @@ static const CGFloat kMinWindowH     = 400.0;
     // hideHandler since no caller in the standalone path will fire it.)
     _beadsPanel.showsHidePanelMenuItem = NO;
 
-    // Update the window title whenever the panel's bound project changes
-    // — including via the in-app project switcher, which doesn't route
-    // through our own bindProject: above. Weak self avoids a retain cycle
-    // (controller strongly owns the panel which retains this block).
+    // Update the window title (and our tracked boundProjectRoot) whenever
+    // the panel's bound project changes — including via the in-app
+    // project switcher, which doesn't route through our own bindProject:
+    // above. Weak self avoids a retain cycle (controller strongly owns
+    // the panel which retains this block).
     __weak typeof(self) weakSelf = self;
     _beadsPanel.projectDidChangeHandler = ^(BeadsProject * _Nullable project) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
+        strongSelf->_boundProjectRoot = [project.projectRoot.stringByStandardizingPath copy];
         if (project) {
             [strongSelf _setWindowTitleFromProjectRoot:project.projectRoot];
         } else {
-            strongSelf.window.title = @"Beads";
+            strongSelf.window.title = @"BeadsViewer";
         }
     };
 
@@ -87,6 +104,7 @@ static const CGFloat kMinWindowH     = 400.0;
 }
 
 - (void)bindProject:(nullable BeadsProject *)project {
+    _boundProjectRoot = [project.projectRoot.stringByStandardizingPath copy];
     [self.beadsPanel bindProject:project];
 
     // Reflect the project name in the window title for at-a-glance
@@ -94,19 +112,19 @@ static const CGFloat kMinWindowH     = 400.0;
     if (project) {
         [self _setWindowTitleFromProjectRoot:project.projectRoot];
     } else {
-        self.window.title = @"Beads";
+        self.window.title = @"BeadsViewer";
     }
 }
 
 - (void)_setWindowTitleFromProjectRoot:(NSString *)projectRoot {
     if (!projectRoot.length) {
-        self.window.title = @"Beads";
+        self.window.title = @"BeadsViewer";
         return;
     }
     NSString *base = projectRoot.lastPathComponent ?: @"";
     self.window.title = base.length
-        ? [NSString stringWithFormat:@"Beads — %@", base]
-        : @"Beads";
+        ? [NSString stringWithFormat:@"BeadsViewer — %@", base]
+        : @"BeadsViewer";
 }
 
 - (NSString *)_resolveResourcesDir {
@@ -118,6 +136,20 @@ static const CGFloat kMinWindowH     = 400.0;
     // contexts that don't have a real bundle).
     NSString *exec = [[NSBundle mainBundle] executablePath];
     return exec.stringByDeletingLastPathComponent ?: @"";
+}
+
++ (NSString *)_autosaveNameForProjectRoot:(nullable NSString *)projectRoot {
+    if (!projectRoot.length) return kBeadsWindowAutosaveEmpty;
+    // Hash the standardized root so the key is stable but compact, and
+    // doesn't expose the user's home path inside NSUserDefaults keys.
+    // NSString.hash is stable within a single process — we want it stable
+    // across launches too. Use a small DJB2-style hash over UTF-8 bytes.
+    const char *utf8 = projectRoot.UTF8String;
+    unsigned long hash = 5381;
+    for (const char *p = utf8; p && *p; ++p) {
+        hash = ((hash << 5) + hash) + (unsigned char)(*p);
+    }
+    return [NSString stringWithFormat:@"%@.%lX", kBeadsWindowAutosaveBase, hash];
 }
 
 @end
